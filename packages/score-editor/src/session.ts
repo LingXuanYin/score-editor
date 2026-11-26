@@ -1,0 +1,861 @@
+// ABOUTME: The editing session: the song project, its undo history, the selection and the insertion point, and the UI state view parts share.
+// ABOUTME: Headless: it touches no DOM, so it imports and runs in Node and in a Worker like the rest of the headless layer.
+
+import { ZOOM_MAX, ZOOM_MIN } from "./arrangement";
+import { commandRefusal } from "./command-refusal";
+import type { ScoreCommand } from "./commands";
+import { type Grid, isGridAllowed, movedIds } from "./commands-notes";
+import { type PlacingCommand, placedSelection } from "./commands-place";
+import { isProjectCommand, type ProjectCommand } from "./commands-project";
+import type { Diagnostic } from "./diagnostics";
+import type { DialectRegistry, ScoreDialect } from "./dialect";
+import { DEFAULT_GRID, normalizeGrid, sameGrid } from "./grid";
+import {
+  batchUndoOf,
+  type EditOrigin,
+  type HistoryCommand,
+  type HistoryStep,
+  isHistoryCommand,
+  stepOf,
+  withStoppedBatches,
+} from "./history";
+import type { Score, SongProject } from "./score";
+import type { ScoreTool, ToolContext, ToolParameterValues, ToolResult } from "./tool";
+import { applyCommandList, applyToolRequest, previewTool as computePreview, noDialectDiagnostic } from "./tool";
+import type { DialectConstraints, Language } from "./types";
+
+/** What reading the project's score came to: a score, or the reason there is none. */
+export type ScoreReading =
+  | { readonly kind: "score"; readonly score: Score }
+  | { readonly kind: "unreadable"; readonly diagnostics: ReadonlyArray<Diagnostic> }
+  | { readonly kind: "no-dialect"; readonly modelId: string };
+
+/** Where a paste or an inserted bar lands: a position on the shared time axis, in ticks. */
+export interface InsertionPoint {
+  readonly tick: number;
+}
+
+/** A run of bars chosen in the ruler: `from` is 0-based and `count` is at least one. UI state, not in the history. */
+export interface BarSelection {
+  readonly from: number;
+  readonly count: number;
+}
+
+/** The UI state that several view parts must show alike. It is not part of the document and not in the history. */
+export interface ViewState {
+  /** Zoom of the time axis; 1 is the host's beat width, and the range is 0.01 to 4. */
+  readonly zoom: number;
+  /** How far the time axis is scrolled to the left, in pixels at the current zoom. */
+  readonly scrollLeft: number;
+  /** The interface language of every part. */
+  readonly language: Language;
+  /**
+   * Whether the user may change the score. Parts offer editing controls and accept selection and editing keys only while
+   * it is true. It does not stop `dispatch`: whoever drives the session directly decides what it sends.
+   */
+  readonly editable: boolean;
+}
+
+/** The views of the default editor, in the order its switcher lists them. A host that draws its own switcher offers these. */
+export const VIEW_NAMES = ["arrangement", "staff", "text"] as const;
+
+/** Which view is shown: the arrangement of tracks, the staff drawn by abcjs, or the score text. */
+export type ViewName = (typeof VIEW_NAMES)[number];
+
+/** Text a view offered as the score that the session did not take, with what is wrong with it. UI state: not in the history. */
+export interface RejectedText {
+  readonly text: string;
+  readonly diagnostics: ReadonlyArray<Diagnostic>;
+}
+
+export interface SessionOptions {
+  /** The song project to edit. */
+  project: SongProject;
+  /** The score dialects the session can read and write, built by the host with `createDialectRegistry`. */
+  dialects: DialectRegistry;
+  /** The interface language of the parts bound to the session. Defaults to "en". */
+  language?: Language;
+  /** Whether the user may edit. Defaults to true; see `ViewState.editable`. */
+  editable?: boolean;
+  /** The view shown first. Defaults to "arrangement". */
+  activeView?: ViewName;
+  /** The grid the editing starts on. Defaults to 1/4. A value the editor does not offer is a RangeError. */
+  grid?: Grid;
+}
+
+/**
+ * What a dispatch came to. A refused command carries its diagnostics and the project it left untouched. A command the
+ * session took can still carry notices (`isNoticeDiagnostic`): the project is changed and usable, and the notice says
+ * something the user should know about it, such as a style without a BPM after a tempo change. A notice is not a refusal.
+ */
+export type DispatchResult =
+  | {
+      readonly ok: true;
+      readonly project: SongProject;
+      readonly diagnostics: ReadonlyArray<Diagnostic>;
+      /** The 1-based bars the command rewrote; absent when none did. */
+      readonly rewrittenBars?: ReadonlyArray<number>;
+    }
+  | {
+      readonly ok: false;
+      readonly project: SongProject;
+      readonly diagnostics: ReadonlyArray<Diagnostic>;
+      readonly rewrittenBars?: ReadonlyArray<number>;
+      /** A batch undo that asked first: the steps of other authors it would also take back, oldest first. */
+      readonly otherAuthorSteps?: ReadonlyArray<HistoryStep>;
+    };
+
+/** What caused a change the session announces. */
+export type SessionChangeCause =
+  | "dispatch"
+  | "bar-selection"
+  | "undo"
+  | "redo"
+  | "select"
+  | "insertion-point"
+  | "view"
+  | "replace"
+  | "active-view"
+  | "rejected-text"
+  | "grid"
+  | "batch-stop";
+
+/**
+ * One announced change: its cause, and which parts of the session's state it touched. A change of the shown view, of
+ * the rejected text or of the grid touches none of the four booleans and is told by its cause alone. A stopped batch
+ * is written into the project, so its change touches the project.
+ */
+export interface SessionChange {
+  readonly cause: SessionChangeCause;
+  /** The song project (and with it the undo history) changed. */
+  readonly project: boolean;
+  readonly selection: boolean;
+  readonly insertionPoint: boolean;
+  /** The view state (zoom, scroll, language, editable) changed. */
+  readonly view: boolean;
+  /**
+   * The project command a `"dispatch"` change was made by, so a log can tell a text typed into the score from the other
+   * edits. Absent on every other change, and on a dispatch of a score command or a tool run: those are told by the
+   * changed project alone.
+   */
+  readonly command?: ProjectCommand;
+  /**
+   * The history step the change made, undid or redid: its author, its batch when it has one, and its sentence. It is on a
+   * `"dispatch"` change, which made the step, on each `"undo"` change, which took one back, and on each `"redo"` change,
+   * which brought one back. A batch undo announces one `"undo"` change per step it takes back. Absent on every other
+   * change.
+   */
+  readonly step?: HistoryStep;
+  /**
+   * The grid that was dropped for the default because the project or the dialects no longer allow it. It is present on
+   * the one change that dropped it, with `gridDropped` absent from every later change since the grid is then the
+   * default already. A host can use it to say once what changed.
+   */
+  readonly gridDropped?: Grid;
+}
+
+export type SessionListener = (change: SessionChange) => void;
+
+export interface EditingSession {
+  /** The current song project: the one document the editor edits. */
+  readonly project: SongProject;
+  /** Whether `undo` has a project to go back to. */
+  readonly canUndo: boolean;
+  /** Whether `redo` has a project to go forward to. */
+  readonly canRedo: boolean;
+  /** The steps `undo` would take back, oldest first: who made each, its batch when it has one, and its sentence. */
+  readonly steps: ReadonlyArray<HistoryStep>;
+  /** The batches the user stopped, in the order they were stopped. */
+  readonly stoppedBatches: ReadonlyArray<string>;
+  /**
+   * The project's score as its dialect reads it. Every view part draws from this one reading, which stays the
+   * same object until the score text, the model or the dialects change.
+   */
+  readonly reading: ScoreReading;
+  /**
+   * The dialect that reads the project's model, or undefined when the registry has none. It is how a control learns what
+   * the dialect allows (`dialect.constraints`) and how a panel asks what the project carries (`checkProject`). It follows
+   * `replaceDialects` and a project of another model.
+   */
+  readonly dialect: ScoreDialect | undefined;
+  /**
+   * The ids of the selected notes. The selection is UI state: it is not in the history. An id that names no note of
+   * the current score is dropped, so the selection always names notes that exist.
+   */
+  readonly selection: ReadonlyArray<string>;
+  /** The insertion point, or null when none is set. UI state: not in the history. */
+  readonly insertionPoint: InsertionPoint | null;
+  /**
+   * The run of bars chosen in the ruler, or null when none is chosen. UI state like the note selection: it is separate
+   * from it, not in the history, and a change of the project clears it because the bars it names may have moved.
+   */
+  readonly barSelection: BarSelection | null;
+  /** The view state: zoom, horizontal scroll, language and whether the user may edit, shared by every part bound to the session. */
+  readonly view: ViewState;
+  /** The dialect's declared constraints, or null while the project's model has no dialect; the meter control reads its rule. */
+  readonly constraints: DialectConstraints | null;
+  /**
+   * Which view is shown. UI state like the selection: not in the history and not a field of `view`. The default editor shows
+   * this view; a host that lays its own views out reads it to show the same one, or sets it from its own switcher.
+   */
+  readonly activeView: ViewName;
+  /**
+   * Text the text view holds that the session did not take, because it cannot be read; null while the text view holds
+   * nothing of the kind. While there is some, the project keeps the last readable score and the views that draw it are
+   * stale. A change of the project drops it, since the text view then shows the project's score again.
+   */
+  readonly rejectedText: RejectedText | null;
+  /**
+   * The time grid that notes move, resize and land on, and that the insertion point steps by. UI state of the session
+   * like the selection: not in the project and not in the history. It starts at 1/4.
+   */
+  readonly grid: Grid;
+  /**
+   * The 1-based bars the last edit rewrote, as its result reported them. Undo and redo put back the bars of the step they
+   * moved, and opening another project starts it empty. The review highlights the entries that name them.
+   */
+  readonly rewrittenBars: ReadonlyArray<number>;
+  /**
+   * Marks a batch as stopped by the user. From then on an edit, a tool run or a history command whose origin carries the
+   * batch is refused with `batch-stopped`, saying the user stopped it, and so is an agent's `undoBatch` that names the
+   * batch, whatever batch the agent's origin carries. The edits it already made stay. The user's own history commands
+   * still take them back, since they carry no batch. The mark is written into `project.stoppedBatches`, so it is saved
+   * with the project; it is not a history step.
+   */
+  stopBatch(batch: string): void;
+  /**
+   * Applies one command to the project, as one step of the history. A refused command changes nothing and returns its
+   * diagnostics; a command that leaves the project as it was adds no step and announces nothing. A command that comes
+   * back with notices only is taken: the project changes as one step, and the result is `ok` with the notices in
+   * `diagnostics`. `origin` says who made the edit, its batch and its sentence; without it the edit is the user's,
+   * in no batch. A history command (`undo`, `redo`, `undoBatch`) moves the history instead and adds no step of its own;
+   * like an edit, it is refused while its origin carries a stopped batch, and an agent's `undoBatch` of a stopped batch is
+   * refused too.
+   */
+  dispatch(command: ScoreCommand | ProjectCommand | HistoryCommand, origin?: EditOrigin): DispatchResult;
+  /**
+   * Applies a list of commands as one step of the history, through the same path as `dispatch`: all of them apply, in
+   * order, or none does, and the listeners hear one change. It is how a gesture that needs several commands, such as
+   * dragging a boundary two lyric lines share, stays one undo. A notice does not stop the list, and the notices of the
+   * steps that were taken come back once each; any other diagnostic refuses all of it. An empty list, or one that leaves
+   * the project as it was, adds no step.
+   */
+  dispatchAll(commands: ReadonlyArray<ScoreCommand | ProjectCommand>, origin?: EditOrigin): DispatchResult;
+  /**
+   * What `dispatch` of `replaceScoreText` with `text` would say, without changing or announcing anything: the
+   * diagnostics it would be refused with, the notices it would be taken with, and none when it would take the text
+   * plainly. `isNoticeDiagnostic` tells the two apart; a result with no other diagnostic is a text the session takes. The
+   * check is that command's own path, the song-project rules included, so the two cannot disagree.
+   */
+  checkScoreText(text: string): ReadonlyArray<Diagnostic>;
+  /**
+   * Runs a tool on the session: validates its parameters, builds its commands, and applies all of them as one history
+   * step through the same command path as `dispatch`. One failing step refuses the whole run and leaves project and
+   * history unchanged. A step that comes back with a notice does not fail the run: the run is `ok` and carries the
+   * notices, each once.
+   */
+  runTool(tool: ScoreTool, values?: ToolParameterValues, origin?: EditOrigin): ToolResult;
+  /** The project a tool would make from the current project and selection, without changing or announcing anything. */
+  previewTool(tool: ScoreTool, values?: ToolParameterValues): ToolResult;
+  /** The UI state a tool may read: the grid, the insertion point, and the bars of the selected notes. */
+  readonly toolContext: ToolContext;
+  /** Selects exactly these notes. Ids that name no note are left out. */
+  select(noteIds: ReadonlyArray<string>): void;
+  /** Chooses a run of bars, or clears the choice with null. A run beyond the score is trimmed to the bars that exist. */
+  setBarSelection(range: BarSelection | null): void;
+  /** Puts the insertion point at `point`, or removes it with null. A tick must be a whole number, zero or more. */
+  setInsertionPoint(point: InsertionPoint | null): void;
+  /** Shows another view. Throws a RangeError for a name that is not in `VIEW_NAMES`. */
+  setActiveView(name: ViewName): void;
+  /** Says which text the text view holds that was not taken, or that it holds none (null). Does nothing when the text is the same. */
+  setRejectedText(next: RejectedText | null): void;
+  /**
+   * Sets the grid. A value the editor does not offer is a RangeError. It does not ask the score: a grid the score cannot
+   * write is refused by the note commands with `grid-not-allowed`, and `allowsGrid` says beforehand.
+   */
+  setGrid(grid: Grid): void;
+  /**
+   * Whether the score the session reads can be edited on this grid: the check the note commands make, run once for a
+   * control to ask. False while the score cannot be read.
+   */
+  allowsGrid(grid: Grid): boolean;
+  /** Changes the view state by the keys given. Zoom is kept within its range, scroll at zero or more. */
+  setView(patch: Partial<ViewState>): void;
+  /**
+   * Replaces the project from outside, as a host does with new data. This starts a new document: the history, the
+   * selection and the insertion point go, and the view state stays. Does nothing when every field is the same.
+   */
+  replaceProject(next: SongProject): void;
+  /** Reads the project with other dialects. The history stays. Does nothing for the registry already in use. */
+  replaceDialects(next: DialectRegistry): void;
+  /** Goes back to the project before the last applied command. False, and nothing changes, when there is none. */
+  undo(): boolean;
+  /** Goes forward again after an `undo`. False, and nothing changes, when there is nothing to redo. */
+  redo(): boolean;
+  /**
+   * Calls `listener` after every change, in the order listeners subscribed. A change a listener causes is announced
+   * after the current one has reached every listener. A listener that throws does not reach the caller of the change:
+   * its error goes to `reportError`, or is rethrown in a microtask where there is none. Returns the function that
+   * unsubscribes it.
+   */
+  subscribe(listener: SessionListener): () => void;
+}
+
+/** Every field counts, so a field added to the project later is compared without a change here. */
+function sameProject(a: SongProject, b: SongProject): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof SongProject>;
+  for (const key of keys) if (!Object.is(a[key], b[key])) return false;
+  return true;
+}
+
+/** A listener's failure must not reach the caller of a change that is already applied, so it is reported apart. */
+function reportListenerError(error: unknown): void {
+  if (typeof reportError === "function") {
+    reportError(error);
+    return;
+  }
+  queueMicrotask(() => {
+    throw error;
+  });
+}
+
+function startingGrid(grid: Grid | undefined): Grid {
+  if (grid === undefined) return DEFAULT_GRID;
+  const normal = normalizeGrid(grid);
+  if (normal === null) throw new RangeError("The grid is not one the editor offers.");
+  return normal;
+}
+
+export function createEditingSession(options: SessionOptions): EditingSession {
+  let project = options.project;
+  /** The history keeps whole song projects, oldest first; the current project is in neither list. */
+  const past: SongProject[] = [];
+  const future: SongProject[] = [];
+  /** The bars each history step rewrote, in the same order as the two project lists. */
+  const pastRewrite: Array<ReadonlyArray<number>> = [];
+  const futureRewrite: Array<ReadonlyArray<number>> = [];
+  /** The step each entry of `past` was made by: `pastSteps[i]` took `past[i]` on to the next project. */
+  const pastSteps: HistoryStep[] = [];
+  /** The step each entry of `future` was made by, in the same order. */
+  const futureSteps: HistoryStep[] = [];
+  /**
+   * The batches the user stopped: an edit that carries one of them is refused. Kept across a replaced project, and written
+   * into the project the session holds, so the marks are saved with it and read back when it opens.
+   */
+  const stopped = new Set<string>(options.project.stoppedBatches ?? []);
+  let lastRewrite: ReadonlyArray<number> = [];
+  let dialects = options.dialects;
+  let selection: ReadonlyArray<string> = [];
+  let insertionPoint: InsertionPoint | null = null;
+  let barSelection: BarSelection | null = null;
+  let activeView: ViewName = options.activeView ?? "arrangement";
+  let rejectedText: RejectedText | null = null;
+  let grid: Grid = startingGrid(options.grid);
+  let view: ViewState = {
+    zoom: 1,
+    scrollLeft: 0,
+    language: options.language ?? "en",
+    editable: options.editable ?? true,
+  };
+  let cached: { modelId: string; score: string; dialects: DialectRegistry; reading: ScoreReading } | null = null;
+  const listeners: Array<{ call: SessionListener; active: boolean }> = [];
+  const queue: SessionChange[] = [];
+  let delivering = false;
+
+  /** The UI state a tool may read: the grid its result lands on, the insertion point a split uses, the selection's bars. */
+  function toolContext(): ToolContext {
+    let first: number | null = null;
+    let last: number | null = null;
+    const reading = read();
+    if (reading.kind === "score") {
+      const selected = new Set(selection);
+      for (const note of reading.score.notes) {
+        if (!selected.has(note.id)) continue;
+        const bar = note.bar + 1;
+        if (first === null || bar < first) first = bar;
+        if (last === null || bar > last) last = bar;
+      }
+    }
+    return {
+      grid,
+      insertionPoint: insertionPoint === null ? null : insertionPoint.tick,
+      selectionFirstBar: first,
+      selectionLastBar: last,
+    };
+  }
+
+  function announce(cause: SessionChangeCause, touched: Partial<Omit<SessionChange, "cause">>): void {
+    queue.push({ cause, project: false, selection: false, insertionPoint: false, view: false, ...touched });
+    if (delivering) return;
+    delivering = true;
+    try {
+      for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+        for (const listener of [...listeners]) {
+          if (!listener.active) continue;
+          try {
+            listener.call(next);
+          } catch (error) {
+            reportListenerError(error);
+          }
+        }
+      }
+    } finally {
+      delivering = false;
+    }
+  }
+
+  /** Runs `found` with the dialect of the project's model, or `missing` when the registry has none for it. */
+  function withDialect<T>(found: (dialect: ScoreDialect) => T, missing: (modelId: string) => T): T {
+    const dialect = dialects.find(project.modelId);
+    return dialect ? found(dialect) : missing(project.modelId);
+  }
+
+  function read(): ScoreReading {
+    if (cached?.modelId === project.modelId && cached.score === project.score && cached.dialects === dialects) {
+      return cached.reading;
+    }
+    const reading = withDialect<ScoreReading>(
+      (dialect) => {
+        const { score, diagnostics } = dialect.parse(project.score);
+        return score ? { kind: "score", score } : { kind: "unreadable", diagnostics };
+      },
+      (modelId) => ({ kind: "no-dialect", modelId }),
+    );
+    cached = { modelId: project.modelId, score: project.score, dialects, reading };
+    return reading;
+  }
+
+  function idsStillInScore(ids: ReadonlyArray<string>): string[] {
+    const reading = read();
+    if (reading.kind !== "score") return [];
+    const known = new Set(reading.score.notes.map((note) => note.id));
+    return [...new Set(ids)].filter((id) => known.has(id));
+  }
+
+  function sameIds(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean {
+    return a.length === b.length && a.every((id, at) => id === b[at]);
+  }
+
+  function sameBarSelection(a: BarSelection | null, b: BarSelection | null): boolean {
+    return a === b || (a !== null && b !== null && a.from === b.from && a.count === b.count);
+  }
+
+  /** A range trimmed to the bars the score has; a range that names none, or no score, leaves no choice. */
+  function barsStillInScore(range: BarSelection | null): BarSelection | null {
+    if (range === null) return null;
+    const reading = read();
+    if (reading.kind !== "score" || reading.score.bars.length === 0) return null;
+    if (!Number.isInteger(range.from) || !Number.isInteger(range.count) || range.count < 1) return null;
+    const from = Math.max(0, Math.min(range.from, reading.score.bars.length - 1));
+    const last = Math.min(reading.score.bars.length - 1, range.from + range.count - 1);
+    return last < from ? null : { from, count: last - from + 1 };
+  }
+
+  /**
+   * Leaves the grid in force when the score can write it, and otherwise puts the default grid in force and returns the
+   * one it dropped. A score that cannot be read says nothing about what it can write, so the grid stays. The default
+   * itself is never dropped again: it is the grid the session goes back to, whether or not this score can write it.
+   */
+  function droppedGrid(): Grid | undefined {
+    const found = read();
+    if (found.kind !== "score" || sameGrid(grid, DEFAULT_GRID)) return undefined;
+    const allowed = withDialect(
+      (dialect) => isGridAllowed(found.score, grid, dialect.constraints),
+      () => true,
+    );
+    if (allowed) return undefined;
+    const dropped = grid;
+    grid = DEFAULT_GRID;
+    return dropped;
+  }
+
+  /**
+   * `following` is the selection to keep, when the change moved the notes it names to ids of their own; it replaces the
+   * current selection before ids that name no note are dropped. `step` is the history step the change made, undid or
+   * redid, when it did one.
+   */
+  function projectChanged(
+    cause: SessionChangeCause,
+    command?: ProjectCommand,
+    following?: ReadonlyArray<string>,
+    step?: HistoryStep,
+  ): void {
+    const kept = idsStillInScore(following ?? selection);
+    const selectionChanged = !sameIds(kept, selection);
+    selection = kept;
+    barSelection = null;
+    rejectedText = null;
+    const gridDropped = droppedGrid();
+    announce(cause, {
+      project: true,
+      selection: selectionChanged,
+      ...(command === undefined ? {} : { command }),
+      ...(step === undefined ? {} : { step }),
+      ...(gridDropped === undefined ? {} : { gridDropped }),
+    });
+  }
+
+  /**
+   * The selection a move or a resize leaves: the notes it named are found again by their new ids, which are their new
+   * starts. Undefined for every other command, which keeps the selection as ids that still name a note.
+   */
+  function followedSelection(commands: ReadonlyArray<ScoreCommand | ProjectCommand>): string[] | undefined {
+    const only = commands[0];
+    const reading = read();
+    if (commands.length !== 1 || only === undefined || reading.kind !== "score") return undefined;
+    if (only.type !== "moveNotes" && only.type !== "resizeNotes") return undefined;
+    const moved = movedIds(reading.score, only);
+    return [...new Set(selection.map((id) => moved.get(id) ?? id))];
+  }
+
+  /** The selections around a step that moved notes, so an undo and a redo put the selection back with the notes. */
+  const selectionBefore = new WeakMap<SongProject, ReadonlyArray<string>>();
+  const selectionAfter = new WeakMap<SongProject, ReadonlyArray<string>>();
+
+  function commit(
+    next: SongProject,
+    cause: SessionChangeCause,
+    command: ProjectCommand | undefined,
+    following: ReadonlyArray<string> | undefined,
+    rewritten: ReadonlyArray<number>,
+    step: HistoryStep,
+  ): void {
+    if (following !== undefined) {
+      selectionBefore.set(project, selection);
+      selectionAfter.set(next, following);
+    }
+    past.push(project);
+    pastRewrite.push(rewritten);
+    pastSteps.push(step);
+    future.length = 0;
+    futureRewrite.length = 0;
+    futureSteps.length = 0;
+    lastRewrite = rewritten;
+    project = withStoppedBatches(next, [...stopped]);
+    projectChanged(cause, command, following, step);
+  }
+
+  /**
+   * The refusal of an edit, a tool run or a history command whose origin carries a batch the user stopped; undefined
+   * when it may go on.
+   */
+  function stoppedDiagnostic(origin: EditOrigin | undefined): Diagnostic | undefined {
+    const batch = origin?.batch;
+    if (batch === undefined || !stopped.has(batch)) return undefined;
+    return commandRefusal("batch-stopped", { batch }).diagnostic;
+  }
+
+  /** The one path a list of commands takes into the history: all apply, or none does. */
+  function applyCommands(
+    commands: ReadonlyArray<ScoreCommand | ProjectCommand>,
+    origin: EditOrigin | undefined,
+    named?: ProjectCommand,
+  ): DispatchResult {
+    const stoppedBy = stoppedDiagnostic(origin);
+    if (stoppedBy !== undefined) return { ok: false, project, diagnostics: [stoppedBy] };
+    return withDialect<DispatchResult>(
+      (dialect) => {
+        const before = read();
+        let following = followedSelection(commands);
+        const applied = applyCommandList(dialect, project, commands);
+        if (!applied.ok) return { ok: false, project, diagnostics: applied.diagnostics };
+        if (!sameProject(project, applied.project)) {
+          // An edit that places notes follows the notes it made, since their ids are their new starts.
+          const only = commands.length === 1 ? commands[0] : undefined;
+          const placing =
+            only !== undefined &&
+            ["addNote", "pasteNotes", "duplicateNotes", "copyNotes"].includes((only as { readonly type: string }).type);
+          if (placing && before.kind === "score") {
+            const after = dialect.parse(applied.project.score).score;
+            if (after !== null) {
+              following = placedSelection(before.score, after, only as PlacingCommand, dialect.constraints);
+            }
+          }
+          commit(applied.project, "dispatch", named, following, applied.rewrittenBars ?? [], stepOf(origin));
+        }
+        return {
+          ok: true,
+          project,
+          diagnostics: applied.diagnostics,
+          ...(applied.rewrittenBars === undefined ? {} : { rewrittenBars: applied.rewrittenBars }),
+        };
+      },
+      (modelId) => ({ ok: false, project, diagnostics: [noDialectDiagnostic(modelId)] }),
+    );
+  }
+
+  /** Goes back one step, moving its record to the redo side. False, and nothing changes, when there is no step. */
+  function undoStep(): boolean {
+    const previous = past.pop();
+    if (previous === undefined) return false;
+    const rewritten = pastRewrite.pop() ?? [];
+    const step = pastSteps.pop() ?? stepOf();
+    futureSteps.push(step);
+    future.push(project);
+    futureRewrite.push(rewritten);
+    lastRewrite = rewritten;
+    project = withStoppedBatches(previous, [...stopped]);
+    projectChanged("undo", undefined, selectionBefore.get(previous), step);
+    return true;
+  }
+
+  /**
+   * Goes forward one step, moving its record back to the history side. False, and nothing changes, when there is none.
+   */
+  function redoStep(): boolean {
+    const next = future.pop();
+    if (next === undefined) return false;
+    const rewritten = futureRewrite.pop() ?? [];
+    const step = futureSteps.pop() ?? stepOf();
+    pastSteps.push(step);
+    past.push(project);
+    pastRewrite.push(rewritten);
+    lastRewrite = rewritten;
+    project = withStoppedBatches(next, [...stopped]);
+    projectChanged("redo", undefined, selectionAfter.get(next), step);
+    return true;
+  }
+
+  /**
+   * Takes back every step from the batch's first one to the top. The other authors' steps among them go only when
+   * confirmed; without the confirmation the refusal lists them and nothing changes.
+   */
+  function undoBatch(batch: string, confirm: boolean): DispatchResult {
+    const plan = batchUndoOf(pastSteps, batch);
+    if (plan === undefined) {
+      return { ok: false, project, diagnostics: [commandRefusal("nothing-to-undo", { batch }).diagnostic] };
+    }
+    if (plan.otherAuthorSteps.length > 0 && !confirm) {
+      return {
+        ok: false,
+        project,
+        diagnostics: [commandRefusal("batch-undo-confirm", { batch, count: plan.otherAuthorSteps.length }).diagnostic],
+        otherAuthorSteps: plan.otherAuthorSteps,
+      };
+    }
+    for (let taken = 0; taken < plan.count; taken += 1) undoStep();
+    return { ok: true, project, diagnostics: [] };
+  }
+
+  /**
+   * The history commands: a step back or forward, or a batch back to before its first step. They add no step of their
+   * own. As an edit is, one is refused while its origin carries a batch the user stopped. An agent's `undoBatch` is also
+   * refused for a stopped batch it names, whatever batch its origin carries: a stop means the agent may no longer act on
+   * that batch. The user's own `undoBatch` takes a stopped batch back.
+   */
+  function runHistoryCommand(command: HistoryCommand, origin: EditOrigin | undefined): DispatchResult {
+    const stoppedBy = stoppedDiagnostic(origin);
+    if (stoppedBy !== undefined) return { ok: false, project, diagnostics: [stoppedBy] };
+    if (command.type === "undoBatch") {
+      if (stepOf(origin).author !== "user" && stopped.has(command.batch)) {
+        const refusal = commandRefusal("batch-stopped", { batch: command.batch }).diagnostic;
+        return { ok: false, project, diagnostics: [refusal] };
+      }
+      return undoBatch(command.batch, command.confirm === true);
+    }
+    if (command.type === "undo" ? undoStep() : redoStep()) return { ok: true, project, diagnostics: [] };
+    const code = command.type === "undo" ? "nothing-to-undo" : "nothing-to-redo";
+    return { ok: false, project, diagnostics: [commandRefusal(code, {}).diagnostic] };
+  }
+
+  return {
+    get project() {
+      return project;
+    },
+    get canUndo() {
+      return past.length > 0;
+    },
+    get canRedo() {
+      return future.length > 0;
+    },
+    get steps() {
+      return [...pastSteps];
+    },
+    get reading() {
+      return read();
+    },
+    get dialect() {
+      return dialects.find(project.modelId);
+    },
+    get selection() {
+      return selection;
+    },
+    get toolContext() {
+      return toolContext();
+    },
+    replaceProject(next) {
+      if (sameProject(project, next)) return;
+      const hadSelection = selection.length > 0;
+      const hadInsertionPoint = insertionPoint !== null;
+      past.length = 0;
+      future.length = 0;
+      pastRewrite.length = 0;
+      futureRewrite.length = 0;
+      pastSteps.length = 0;
+      futureSteps.length = 0;
+      lastRewrite = [];
+      for (const batch of next.stoppedBatches ?? []) stopped.add(batch);
+      project = withStoppedBatches(next, [...stopped]);
+      selection = [];
+      insertionPoint = null;
+      barSelection = null;
+      rejectedText = null;
+      const gridDropped = droppedGrid();
+      announce("replace", {
+        project: true,
+        selection: hadSelection,
+        insertionPoint: hadInsertionPoint,
+        ...(gridDropped === undefined ? {} : { gridDropped }),
+      });
+    },
+    replaceDialects(next) {
+      if (next === dialects) return;
+      dialects = next;
+      projectChanged("replace");
+    },
+    get view() {
+      return view;
+    },
+    setView(patch) {
+      const zoom =
+        patch.zoom !== undefined && Number.isFinite(patch.zoom)
+          ? Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, patch.zoom))
+          : view.zoom;
+      const scrollLeft =
+        patch.scrollLeft !== undefined && Number.isFinite(patch.scrollLeft)
+          ? Math.max(0, patch.scrollLeft)
+          : view.scrollLeft;
+      const language = patch.language ?? view.language;
+      const editable = patch.editable ?? view.editable;
+      if (
+        zoom === view.zoom &&
+        scrollLeft === view.scrollLeft &&
+        language === view.language &&
+        editable === view.editable
+      ) {
+        return;
+      }
+      view = { zoom, scrollLeft, language, editable };
+      announce("view", { view: true });
+    },
+    get insertionPoint() {
+      return insertionPoint;
+    },
+    get barSelection() {
+      return barSelection;
+    },
+    get constraints() {
+      return withDialect<DialectConstraints | null>(
+        (dialect) => dialect.constraints,
+        () => null,
+      );
+    },
+    get activeView() {
+      return activeView;
+    },
+    setActiveView(name) {
+      if (!VIEW_NAMES.includes(name)) throw new RangeError(`No view is called "${String(name)}".`);
+      if (name === activeView) return;
+      activeView = name;
+      announce("active-view", {});
+    },
+    get rejectedText() {
+      return rejectedText;
+    },
+    setRejectedText(next) {
+      if (next === null ? rejectedText === null : rejectedText?.text === next.text) return;
+      rejectedText = next;
+      announce("rejected-text", {});
+    },
+    get grid() {
+      return grid;
+    },
+    get rewrittenBars() {
+      return lastRewrite;
+    },
+    setGrid(next) {
+      const normal = normalizeGrid(next);
+      if (normal === null) throw new RangeError("The grid is not one the editor offers.");
+      if (sameGrid(normal, grid)) return;
+      grid = normal;
+      announce("grid", {});
+    },
+    allowsGrid(candidate) {
+      const found = read();
+      if (found.kind !== "score") return false;
+      return withDialect(
+        (dialect) => isGridAllowed(found.score, candidate, dialect.constraints),
+        () => false,
+      );
+    },
+    checkScoreText(text) {
+      return withDialect<ReadonlyArray<Diagnostic>>(
+        (dialect) => applyCommandList(dialect, project, [{ type: "replaceScoreText", text }]).diagnostics,
+        (modelId) => [noDialectDiagnostic(modelId)],
+      );
+    },
+    setInsertionPoint(point) {
+      if (point !== null && !(Number.isInteger(point.tick) && point.tick >= 0)) {
+        throw new RangeError("The insertion point must be a whole number of ticks, zero or more.");
+      }
+      if (point?.tick === insertionPoint?.tick) return;
+      insertionPoint = point === null ? null : { tick: point.tick };
+      announce("insertion-point", { insertionPoint: true });
+    },
+    select(noteIds) {
+      const next = idsStillInScore(noteIds);
+      if (sameIds(next, selection)) return;
+      selection = next;
+      announce("select", { selection: true });
+    },
+    setBarSelection(range) {
+      const next = barsStillInScore(range);
+      if (sameBarSelection(next, barSelection)) return;
+      barSelection = next;
+      announce("bar-selection", {});
+    },
+    get stoppedBatches() {
+      return [...stopped];
+    },
+    stopBatch(batch) {
+      if (stopped.has(batch)) return;
+      stopped.add(batch);
+      project = withStoppedBatches(project, [...stopped]);
+      announce("batch-stop", { project: true });
+    },
+    dispatch(command, origin) {
+      if (isHistoryCommand(command)) return runHistoryCommand(command, origin);
+      return applyCommands([command], origin, isProjectCommand(command) ? command : undefined);
+    },
+    dispatchAll(commands, origin) {
+      return applyCommands(commands, origin);
+    },
+    runTool(tool, values = {}, origin?: EditOrigin) {
+      const stoppedBy = stoppedDiagnostic(origin);
+      if (stoppedBy !== undefined) return { ok: false, project, diagnostics: [stoppedBy], commands: [] };
+      const result = applyToolRequest(tool, { project, selection, values }, dialects, toolContext());
+      if (result.ok && !sameProject(project, result.project)) {
+        commit(result.project, "dispatch", undefined, undefined, result.rewrittenBars ?? [], stepOf(origin));
+      }
+      return result;
+    },
+    previewTool(tool, values = {}) {
+      return computePreview(tool, project, selection, values, dialects, toolContext());
+    },
+    undo() {
+      return undoStep();
+    },
+    redo() {
+      return redoStep();
+    },
+    subscribe(call) {
+      const listener = { call, active: true };
+      listeners.push(listener);
+      return () => {
+        listener.active = false;
+        const at = listeners.indexOf(listener);
+        if (at >= 0) listeners.splice(at, 1);
+      };
+    },
+  };
+}

@@ -1,0 +1,17 @@
+{
+  "name": "score-editor-skill-pnpm-bundler-example",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "preview": "node serve.mjs"
+  },
+  "dependencies": {
+    "@anti_entropy/score-dialect-yue2": "0.4.7",
+    "@anti_entropy/score-editor": "0.4.7"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

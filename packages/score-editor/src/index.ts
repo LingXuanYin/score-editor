@@ -1,0 +1,243 @@
+// ABOUTME: Main entry of @anti_entropy/score-editor. Importing it has no side effects and touches no DOM.
+// ABOUTME: Only a call to mount() or to a view part's mount function creates nodes or listeners; the editing session touches no DOM.
+// biome-ignore-all assist/source/organizeImports: the shared list keeps its new entries in one block at the end (COMMON-UI.md).
+
+export type { ApplyProjectResult, ApplyScoreResult } from "./apply";
+export { applyProjectCommand, applyScoreCommand } from "./apply";
+export type { ChangeLogEntry, ChangeLogOptions, HandoffInstructionOptions } from "./change-log";
+export { changeLog, changeLogEntries, handoffInstruction } from "./change-log";
+export type { ChordSlot } from "./chord-edit";
+export { chordSlots, nearestChordSlot } from "./chord-edit";
+export { mountChordTrack } from "./chord-track";
+export type { ChordChoices, ChordLetter, ChordNameParts } from "./chord-vocabulary";
+export { chordChoices, splitChordName } from "./chord-vocabulary";
+export type { ScoreCommand } from "./commands";
+export type {
+  CommandReport,
+  InstrumentalReport,
+  InstrumentalVersionCommand,
+  VocalRange,
+  VoiceCommand,
+  VoiceOctaveCommand,
+  VoiceOctaveReport,
+} from "./commands-voice";
+export { SINGABLE_RANGE, vocalRange } from "./commands-voice";
+export type { Grid, GridValue, MoveNotesCommand, MoveResizeCommand, ResizeNotesCommand } from "./commands-notes";
+export type { ProjectCommand } from "./commands-project";
+export { checkProject } from "./commands-project";
+export { preHandoffNotices } from "./handoff-notices";
+export { mountCutNotice } from "./cut-notice";
+export type {
+  CommandDiagnosticCode,
+  Diagnostic,
+  DiagnosticAt,
+  DiagnosticCode,
+  DiagnosticParams,
+  NoticeDiagnosticCode,
+  ReadingDiagnosticCode,
+} from "./diagnostics";
+export {
+  COMMAND_DIAGNOSTIC_CODES,
+  formatDiagnostic,
+  isNoticeDiagnostic,
+  NOTICE_DIAGNOSTIC_CODES,
+  READING_DIAGNOSTIC_CODES,
+} from "./diagnostics";
+export type { DialectRegistry, ParseResult, ScoreDialect } from "./dialect";
+export { createDialectRegistry } from "./dialect";
+export { mountDraftConflict } from "./draft-conflict";
+// Drafts below the UI.
+export type {
+  DraftHandoffResult,
+  DraftKeeper,
+  DraftKeeperChange,
+  DraftKeeperOptions,
+  DraftKeeperStatus,
+} from "./draft-keeper";
+export { createDraftKeeper } from "./draft-keeper";
+export type { DraftProject, ScoreDraft } from "./drafts";
+export { contentHash, DRAFT_FORMAT_VERSION, draftText, readDraft } from "./drafts";
+export type { EditingInput, EditingInputResult } from "./editing-input";
+export { handleEditingInput } from "./editing-input";
+// The lyric track: the rules a host's own lyric view can reuse.
+export type {
+  LyricBoundaryDrag,
+  LyricBoundaryMove,
+  LyricBoundaryPlan,
+  LyricDrop,
+  LyricDropPlan,
+  LyricEdge,
+  LyricRow,
+  LyricSplit,
+} from "./lyric-edit";
+export { barLineTick, lyricBoundaryPlan, lyricDropPlan, lyricRows, lyricSplitCommand } from "./lyric-edit";
+export type { LyricTrackPart } from "./lyric-track";
+export { mountLyricTrack } from "./lyric-track";
+export type { LyricAlignment, LyricSyllableNote } from "./lyrics";
+export {
+  alignedLyricLines,
+  alignLyricLine,
+  joinLyrics,
+  LYRICS_MAX_CHARACTERS,
+  layoutLyrics,
+  lyricCharacterCount,
+  lyricLinesOf,
+  lyricSyllables,
+  noteOnsets,
+  syllableCount,
+  unalignedLyricLines,
+} from "./lyrics";
+export { COMMON_METERS, meterAllowed, meterChoices } from "./meter";
+export { mount } from "./mount";
+export type {
+  ScoreFileHandoffResult,
+  ScoreFileKeeper,
+  ScoreFileKeeperChange,
+  ScoreFileKeeperOptions,
+  ScoreFileKeeperStatus,
+} from "./score-source";
+export { createScoreFileKeeper } from "./score-source";
+// The synth preview.
+export type { PreviewNoteOptions } from "./preview-note";
+export { previewNote } from "./preview-note";
+export type { PreviewPlayer, PreviewStart } from "./preview-player";
+export { previewPlayer } from "./preview-player";
+export type { PreviewChordEvent, PreviewEvent, PreviewNoteEvent, PreviewSchedule } from "./preview-schedule";
+export { schedulePreview } from "./preview-schedule";
+export { mountProblemView } from "./problem-view";
+export type { ProjectPanel, ProjectPanelOptions } from "./project-panel";
+export { mountProjectPanel } from "./project-panel";
+export type {
+  Bar,
+  Chord,
+  KeyChange,
+  LyricLine,
+  LyricPhrase,
+  Meter,
+  Note,
+  Score,
+  Section,
+  SongProject,
+  Tempo,
+  Truncation,
+} from "./score";
+export { noteId, TICKS_PER_QUARTER } from "./score";
+export type { SectionAction, SectionActionName } from "./section-actions";
+export { sectionActions } from "./section-actions";
+export type { EditOrigin, HistoryCommand, HistoryStep } from "./history";
+export type {
+  BarSelection,
+  DispatchResult,
+  EditingSession,
+  InsertionPoint,
+  RejectedText,
+  ScoreReading,
+  SessionChange,
+  SessionChangeCause,
+  SessionListener,
+  SessionOptions,
+  ViewName,
+  ViewState,
+} from "./session";
+export { createEditingSession, VIEW_NAMES } from "./session";
+export type { StaffViewPart } from "./staff-view";
+export { mountStaffView } from "./staff-view";
+export { mountStaleNotice } from "./stale-notice";
+export { mountSynthPreview } from "./synth-preview";
+export { tickAtSeconds } from "./tempo";
+export { mountTextView } from "./text-view";
+export { mountTimeRuler } from "./time-ruler";
+export { NOTE_TOOLS } from "./note-tools";
+export type { ToolPanelOptions, ToolPanelPart } from "./tool-panel";
+export { mountToolPanel } from "./tool-panel";
+export type {
+  BooleanToolParameter,
+  ChoiceToolParameter,
+  CommandListResult,
+  NumberToolParameter,
+  ScoreTool,
+  TextToolParameter,
+  ToolCommandBuilder,
+  ToolContext,
+  ToolGroup,
+  ToolParameter,
+  ToolParameterCheck,
+  ToolParameterValue,
+  ToolParameterValues,
+  ToolRegistry,
+  ToolResult,
+  ToolText,
+} from "./tool";
+export { applyCommandList, createToolRegistry, previewTool, TOOL_GROUPS, validateToolParameters } from "./tool";
+export type { ToolbarOptions, ToolbarPart } from "./toolbar";
+export { mountToolbar } from "./toolbar";
+export type {
+  AxisPartOptions,
+  ChordVocabulary,
+  DialectConstraints,
+  DraftStore,
+  DraftStoreEntry,
+  DraftWriteResult,
+  DurationSet,
+  HandoffPayload,
+  Language,
+  MeterRule,
+  MountedEditor,
+  MountOptions,
+  Notice,
+  NoticeCode,
+  ProjectField,
+  RequiredInput,
+  ScoreFileEntry,
+  ScoreFileReadFailure,
+  ScoreFileSaveResult,
+  ScoreFileSource,
+  ScoreSource,
+  GeneratedScoreSource,
+  ViewPart,
+} from "./types";
+export { NOTICE_CODES } from "./types";
+export { mountViewSwitch } from "./view-switch";
+export type { SourceLabelOptions, SourceLabelPart } from "./source-label";
+export { mountSourceLabel } from "./source-label";
+export type { VoiceTrackOptions } from "./voice-track";
+export { mountVoiceTrack } from "./voice-track";
+export { mountZoomControl } from "./zoom-control";
+// Selecting notes by conditions.
+export type { NoteFilter } from "./filter-notes";
+export { filterNotes } from "./filter-notes";
+export { mountFilterPanel } from "./filter-panel";
+// Placing notes: add, paste at the insertion point, duplicate, and the Alt-drag copy.
+export type {
+  AddNoteCommand,
+  CopiedNote,
+  CopyNotesCommand,
+  DuplicateNotesCommand,
+  PasteNotesCommand,
+} from "./commands-place";
+// Comparing the bars of two scores.
+export type { BarCompareResult } from "./bar-compare";
+export { compareBars } from "./bar-compare";
+// Extracting a run of whole bars as a song project of its own.
+export type { FragmentRange, FragmentResult } from "./fragment";
+export { extractFragment } from "./fragment";
+// The multitrack part of a song project: the data only; the audio stays with the take records.
+export type {
+  Anchor,
+  AudioTrack,
+  MultitrackPart,
+  Placement,
+  ScoreTrack,
+  Span,
+  StemName,
+  TimePoint,
+  TrackMix,
+  TrackNote,
+  VoiceSettings,
+} from "./multitrack";
+export type { ChangeBatch, ChangeRecord, ProjectSnapshot } from "./change-records";
+export { changeRecordsOf, recordChangeBatch } from "./change-records";
+export type { SongEnding } from "./score";
+// Time stretch: the stems and the time map of a track, live and offline.
+export type { RenderStretchOptions, StretchNode, StretchNodeOptions, StretchSegment } from "./stretch";
+export { createStretchNode, int16Stem, renderStretch } from "./stretch";

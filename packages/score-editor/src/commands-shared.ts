@@ -1,0 +1,296 @@
+// ABOUTME: Small model helpers shared by the command files: note places, tie chains, ticks, ordering, sections and keys.
+// ABOUTME: Keeping them here means insert, meter, note and truncation commands read and order notes the same way.
+import { positionOf } from "./arrangement";
+import { commandRefusal } from "./command-refusal";
+import type { ScoreCommandResult } from "./commands";
+import type { DiagnosticAt } from "./diagnostics";
+import type { Chord, KeyChange, Meter, Note, Score, Truncation } from "./score";
+import { TICKS_PER_QUARTER } from "./score";
+import { tieChains } from "./tie-chains";
+import type { DurationSet } from "./types";
+
+/** Where a note is, in the voice, bar and beat a person counts; only its id when the score has no such note. */
+export function noteAt(score: Score, noteId: string): DiagnosticAt {
+  const note = score.notes.find((found) => found.id === noteId);
+  if (note === undefined) return { noteId };
+  const { bar, beat } = positionOf(score.bars, note.bar, note.start);
+  return { voice: note.voice, bar, beat, noteId: note.id };
+}
+
+/**
+ * The whole tie chain around a note: every note tied into it and every note it ties into. A caller that already has
+ * the target voice's notes sorted may pass them to keep the lookup from sorting the whole voice again.
+ */
+export function tieChain(notes: ReadonlyArray<Note>, target: Note, orderedVoiceNotes?: ReadonlyArray<Note>): Note[] {
+  const voiceNotes =
+    orderedVoiceNotes ?? notes.filter((note) => note.voice === target.voice).sort((a, b) => a.start - b.start);
+  const chain = tieChains(voiceNotes).find((members) => members.some((note) => note.id === target.id));
+  return chain === undefined ? [] : [...chain];
+}
+
+/** True when chord material remains: a finished chord, or an unfinished chord string at the cut (RULES.md C8). */
+export function hasChordsAfter(chords: ReadonlyArray<Chord>, truncation: Truncation | null): boolean {
+  return chords.length > 0 || truncation?.unfinishedChord === true;
+}
+
+/** Drops the unfinished chord string's flag when a command removes chord material on purpose. */
+export function withoutUnfinishedChord(truncation: Truncation | null): Truncation | null {
+  if (truncation?.unfinishedChord !== true) return truncation;
+  return { voice: truncation.voice, bar: truncation.bar, short: truncation.short };
+}
+
+/**
+ * RULES.md W16: only a bar command may move a boundary cut in Vocal into Ins, and only when Ins's
+ * first missing measure is the cut measure itself. A longer gap would move the cut earlier in time;
+ * the writer then keeps the Vocal cut and its short Ins block (X9).
+ */
+export function writableCut(score: Pick<Score, "voices" | "notes">, truncation: Truncation | null): Truncation | null {
+  if (truncation === null || truncation.voice !== "Vocal" || truncation.short) return truncation;
+  if (!score.voices.includes("Ins")) return truncation;
+  let end = 0;
+  for (const note of score.notes) if (note.voice === "Ins" && note.bar + 1 > end) end = note.bar + 1;
+  if (end !== truncation.bar - 1) return truncation;
+  return { voice: "Ins", bar: end, short: false };
+}
+
+/** The last cut tail the source carries, when the dialect keeps one; only W18 needs its kind. */
+function sourceCutTail(score: Pick<Score, "source">): { readonly kind?: string } | null {
+  const source = score.source as
+    | { readonly musicLines?: ReadonlyArray<{ readonly cutTail?: { readonly kind?: string } | null }> }
+    | null
+    | undefined;
+  const lines = source?.musicLines ?? [];
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const tail = lines[index]?.cutTail;
+    if (tail !== null && tail !== undefined) return tail;
+  }
+  return null;
+}
+
+/** True when the source's cut ends in an X5 tie continuation (RULES.md X5 and W18). */
+export function hasX5Tail(score: Pick<Score, "source">): boolean {
+  return sourceCutTail(score)?.kind === "x5";
+}
+
+/** True when a note ending at `end` in `voice` is the last note before an X5 tail the writer may keep. */
+export function endsAtX5Tail(score: Score, voice: string, end: number): boolean {
+  const truncation = score.truncation;
+  if (truncation === null || !truncation.short || truncation.voice !== voice) return false;
+  const cutBar = score.bars[truncation.bar];
+  return cutBar !== undefined && cutBar.start === end && hasX5Tail(score);
+}
+
+/**
+ * The first tick a note may not touch: the cut measure, or the first measure after a voice that stopped
+ * before the shared grid (a short or missing final `Ins` block). A span that ends exactly there is still
+ * before the cut.
+ */
+export function noteSafeEnd(score: Score): number {
+  const last = score.bars[score.bars.length - 1];
+  let end = last === undefined ? 0 : last.start + last.length;
+  const cutBar = score.truncation === null ? undefined : score.bars[score.truncation.bar];
+  if (score.truncation?.short === true && cutBar !== undefined) end = Math.min(end, cutBar.start);
+  for (const voice of score.voices) {
+    const truncation = score.truncation;
+    let count = 0;
+    if (truncation !== null && truncation.voice === voice) {
+      count = truncation.bar;
+    } else {
+      for (const note of score.notes) {
+        if (note.voice === voice && note.bar + 1 > count) count = note.bar + 1;
+      }
+    }
+    const next = count > 0 && count < score.bars.length ? score.bars[count] : undefined;
+    if (next !== undefined) end = Math.min(end, next.start);
+  }
+  return end;
+}
+
+/**
+ * RULES.md W14 and W16: a note command may not rewrite the cut's finished tokens, or a group whose final
+ * Ins block stopped short. The cut starts at the measure it falls in; a span that ends exactly there is
+ * still before it.
+ */
+export function editTouchesCut(
+  score: Score,
+  spans: ReadonlyArray<{ readonly start: number; readonly end: number }>,
+  placements: ReadonlyArray<{ readonly start: number; readonly end: number }> = [],
+): boolean {
+  if (score.truncation === null) return false;
+  const safe = noteSafeEnd(score);
+  return [...spans, ...placements].some((span) => span.start >= safe || span.end > safe);
+}
+
+/** A note command that would rewrite the cut returns this refusal instead of a score. */
+export function cutEditRefusal(
+  score: Score,
+  spans: ReadonlyArray<{ readonly start: number; readonly end: number }>,
+  placements: ReadonlyArray<{ readonly start: number; readonly end: number }> = [],
+  at: DiagnosticAt = {},
+): ScoreCommandResult | null {
+  if (!editTouchesCut(score, spans, placements)) return null;
+  return commandRefusal("write-mismatch", { field: "bars" }, at);
+}
+
+/** True when the cut still carries an X4 remainder other than an unfinished chord string. */
+function cutHasOtherTail(score: Score, truncation: Truncation | null): boolean {
+  if (truncation === null || !truncation.short) return false;
+  const source = score.source as
+    | { readonly musicLines?: ReadonlyArray<{ readonly cutTail?: { readonly kind?: string } | null }> }
+    | null
+    | undefined;
+  const tail = source?.musicLines?.[source.musicLines.length - 1]?.cutTail;
+  return tail !== null && tail !== undefined && tail.kind !== "x4-chord";
+}
+
+/** True when the cut measure has no finished note, rest or chord left, so the writer drops its line. */
+function cutBarIsEmptyAfterChords(score: Score, chords: ReadonlyArray<Chord>, truncation: Truncation | null): boolean {
+  if (truncation === null || !truncation.short) return false;
+  if (cutHasOtherTail(score, truncation)) return false;
+  const bar = score.bars[truncation.bar];
+  if (bar === undefined) return false;
+  const hasNote = score.notes.some((note) => note.voice === truncation.voice && note.bar === truncation.bar);
+  const hasChord = chords.some((chord) => chord.start >= bar.start && chord.start < bar.start + bar.length);
+  return !hasNote && !hasChord;
+}
+
+/** The model after removing chords empties the cut measure: its partial bar is gone and the cut moves before it. */
+export function withoutEmptyCutBar(score: Score): Pick<Score, "bars" | "truncation" | "sections"> | null {
+  const truncation = withoutUnfinishedChord(score.truncation);
+  if (!cutBarIsEmptyAfterChords(score, [], truncation)) return null;
+  const last = score.bars[score.bars.length - 1];
+  const bars =
+    last !== undefined && truncation !== null && truncation.bar === last.index && last.incomplete
+      ? score.bars.slice(0, -1)
+      : score.bars;
+  const markers = score.sections.map((section) => ({ name: section.name, firstBar: section.firstBar }));
+  const endOf = (voice: string): number => {
+    let end = 0;
+    for (const note of score.notes) if (note.voice === voice && note.bar + 1 > end) end = note.bar + 1;
+    return end;
+  };
+  // The trimmed Vocal bar may leave the required Ins block short of whole bars; the cut then reads
+  // in Ins, which is the only legal place for it, instead of inventing a Vocal block after it.
+  const shortOther =
+    truncation !== null && truncation.voice === "Vocal"
+      ? score.voices.find((voice) => voice !== "Vocal" && endOf(voice) < truncation.bar)
+      : undefined;
+  return {
+    bars,
+    truncation:
+      truncation === null
+        ? null
+        : shortOther === undefined
+          ? { ...truncation, short: false }
+          : { voice: shortOther, bar: endOf(shortOther), short: false },
+    sections: sectionsFrom({ ...score, bars }, markers),
+  };
+}
+
+/**
+ * The model after a chord removal. Removing the last finished chord also removes an unfinished chord
+ * string at the cut (RULES.md C8), and an emptied cut measure; chord material that remains keeps it.
+ */
+export function withoutChordMaterial(
+  score: Score,
+  chords: ReadonlyArray<Chord>,
+): Pick<Score, "bars" | "truncation" | "sections" | "chords" | "hasChords"> {
+  const trimmed = chords.length === 0 ? withoutEmptyCutBar(score) : null;
+  const truncation =
+    trimmed?.truncation ?? (chords.length === 0 ? withoutUnfinishedChord(score.truncation) : score.truncation);
+  return {
+    ...(trimmed ?? { bars: score.bars, sections: score.sections }),
+    chords,
+    truncation,
+    hasChords: hasChordsAfter(chords, truncation),
+  };
+}
+
+export function barTicks(meter: Meter): number {
+  return (4 * meter.numerator * TICKS_PER_QUARTER) / meter.denominator;
+}
+
+export function isIndex(value: number): boolean {
+  return Number.isInteger(value) && value >= 0;
+}
+
+/** The effective key at a tick: the last stated change at or before it, or the header key. */
+export function effectiveKeyAt(score: Score, at: number, inclusive = true): string {
+  let key = score.keys[0]?.key ?? "C";
+  for (const change of score.keys) {
+    if (change.at < at || (inclusive && change.at === at)) key = change.key;
+    else break;
+  }
+  return key;
+}
+
+export function keyChangesInside(keys: ReadonlyArray<KeyChange>, start: number, length: number): KeyChange[] {
+  return keys.filter((change) => change.at > start && change.at < start + length).map((change) => ({ ...change }));
+}
+
+/** Rebuilds sections from their markers. An unnamed section is added when music comes before the first marker. */
+export function sectionsFrom(
+  score: Score,
+  markers: ReadonlyArray<{ name: string | null; firstBar: number }>,
+): Score["sections"] {
+  const ordered = [...markers].sort((left, right) => left.firstBar - right.firstBar);
+  const withUnnamed =
+    ordered.length === 0 || (ordered[0] as { firstBar: number }).firstBar > 0
+      ? [{ name: null, firstBar: 0 }, ...ordered]
+      : ordered;
+  return withUnnamed.map((section, index) => {
+    const next = withUnnamed[index + 1]?.firstBar ?? score.bars.length;
+    return {
+      name: section.name,
+      firstBar: Math.max(0, section.firstBar),
+      barCount: Math.max(0, next - section.firstBar),
+    };
+  });
+}
+
+export function orderNotes(score: Score, notes: ReadonlyArray<Note>): Note[] {
+  const order = new Map<string, number>();
+  for (let index = 0; index < score.voices.length; index += 1) order.set(score.voices[index] as string, index);
+  return [...notes].sort((left, right) => {
+    const voice = (order.get(left.voice) ?? 0) - (order.get(right.voice) ?? 0);
+    return voice !== 0 ? voice : left.start - right.start;
+  });
+}
+
+export function gcd(left: number, right: number): number {
+  let a = left;
+  let b = right;
+  while (b !== 0) {
+    const next = a % b;
+    a = b;
+    b = next;
+  }
+  return a;
+}
+
+/** The largest common tick step of the score's notes and the given lengths; every piece of it is writable. */
+export function scoreUnit(score: Score, extra: ReadonlyArray<number> = []): number {
+  let unit = 0;
+  for (const note of score.notes) unit = gcd(unit, note.duration);
+  for (const bar of score.bars) unit = gcd(unit, bar.length);
+  for (const length of extra) unit = gcd(unit, length);
+  return Math.max(1, unit);
+}
+
+/**
+ * Splits a length into the score unit, or into the whole length when it is one of the dialect's durations.
+ * Every returned piece is a length the format can write; callers tie the note pieces and keep rests consecutive.
+ */
+export function splitLength(duration: number, unit: number, durations: DurationSet): number[] {
+  if (duration <= 0) return [];
+  const whole = duration / unit;
+  if (Number.isInteger(whole) && durations.includes(whole)) return [duration];
+  const pieces: number[] = [];
+  let left = duration;
+  while (left > 0) {
+    const size = Math.min(unit, left);
+    pieces.push(size);
+    left -= size;
+  }
+  return pieces;
+}

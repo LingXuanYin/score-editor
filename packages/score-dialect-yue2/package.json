@@ -1,0 +1,49 @@
+{
+  "name": "@anti_entropy/score-dialect-yue2",
+  "version": "0.4.7",
+  "description": "The YuE2 score dialect for @anti_entropy/score-editor.",
+  "keywords": [
+    "score-editor",
+    "score-dialect",
+    "yue2"
+  ],
+  "homepage": "https://github.com/LingXuanYin/score-editor#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LingXuanYin/score-editor.git",
+    "directory": "packages/score-dialect-yue2"
+  },
+  "bugs": {
+    "url": "https://github.com/LingXuanYin/score-editor/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "RULES.md",
+    "WRITING.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "@anti_entropy/score-editor": "workspace:^"
+  },
+  "devDependencies": {
+    "@anti_entropy/score-editor": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

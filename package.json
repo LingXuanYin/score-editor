@@ -1,0 +1,31 @@
+{
+  "name": "score-editor-workspace",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@10.29.3",
+  "scripts": {
+    "build": "pnpm -r build",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "typecheck": "pnpm -r typecheck && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "build:skill": "node scripts/build-skill-examples.mjs",
+    "test:e2e": "pnpm build:skill && playwright test",
+    "check:pack": "node scripts/check-pack.mjs",
+    "check:skill": "node scripts/check-skill-exports.mjs",
+    "check": "pnpm build && pnpm lint && pnpm typecheck && pnpm test && pnpm check:skill && pnpm test:e2e"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.15",
+    "@anti_entropy/score-dialect-yue2": "workspace:*",
+    "@anti_entropy/score-editor": "workspace:*",
+    "@playwright/test": "1.64.1",
+    "@types/node": "22.19.19",
+    "esbuild": "0.28.2",
+    "tsdown": "0.15.12",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

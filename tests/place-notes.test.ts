@@ -1,0 +1,464 @@
+// ABOUTME: Seam 1 for placing new notes with YuE2: add a note, paste copied notes at the insertion point, duplicate a selection.
+// ABOUTME: Every expected text is worked by hand from RULES.md; the sample sweep holds the untouched-bars and one-note-a-time promises.
+import { readFileSync } from "node:fs";
+import { yue2Dialect } from "@anti_entropy/score-dialect-yue2";
+import {
+  type ApplyScoreResult,
+  applyProjectCommand,
+  applyScoreCommand,
+  type Score,
+  type ScoreCommand,
+  type Note as ScoreNote,
+} from "@anti_entropy/score-editor";
+import { describe, expect, it } from "vitest";
+import { chainAround, parse, pitched, SAMPLE_SWEEP_TIMEOUT, splitBars } from "./yue2-support";
+
+/** The result without the additive `rewrittenBars` field; tests/rewritten-bars.test.ts asserts that field. */
+function textOnly(text: string, command: ScoreCommand): ApplyScoreResult {
+  const result = applyScoreCommand(yue2Dialect, text, command);
+  return result.ok ? { ok: true, text: result.text } : result;
+}
+
+const HEADER = `X:1
+T:
+M:4/4
+L:1/16
+Q:1/4=120
+V: Vocal clef=treble name="Vocal Melody" snm="Vocal"`;
+
+function scoreOf(body: string, header = HEADER): string {
+  return `${header}
+K:C
+V: Vocal
+${body}`;
+}
+
+const SCORE = scoreOf("C4D4E4F4|G16|");
+
+function add(voice: string, start: number, midi: number, value: 4 | 8 | 16 | 32 = 4): ScoreCommand {
+  return { type: "addNote", voice, start, midi, grid: { value } };
+}
+
+describe("addNote on a hand-worked score", () => {
+  it("puts an empty lane cell's note on the grid with one grid step as its length", () => {
+    const text = scoreOf("C4z4D4E4|G16|");
+    expect(textOnly(text, add("Vocal", 256, 65, 4))).toEqual({
+      ok: true,
+      text: scoreOf("C4F4D4E4|G16|"),
+    });
+  });
+
+  it("removes a note whose start the new note covers and shortens one it starts inside", () => {
+    // C (0-384) is cut at 256; D starts at 384 inside the new note, so it goes; 512-640 is a rest.
+    expect(textOnly(scoreOf("C6D4E4z2|G16|"), add("Vocal", 256, 65, 4))).toEqual({
+      ok: true,
+      text: scoreOf("C4F4z2E4z2|G16|"),
+    });
+  });
+});
+
+function paste(
+  notes: ReadonlyArray<{ voice: string; start: number; duration: number; midi: number }>,
+  at: number,
+  value: 4 | 8 | 16 | 32 = 4,
+): ScoreCommand {
+  return { type: "pasteNotes", notes, at, grid: { value } };
+}
+
+function duplicate(noteIds: ReadonlyArray<string>, value: 4 | 8 | 16 | 32 = 4): ScoreCommand {
+  return { type: "duplicateNotes", noteIds, grid: { value } };
+}
+
+describe("duplicateNotes on a hand-worked score", () => {
+  it("repeats the selection right after itself as one step", () => {
+    const text = scoreOf("C4D4z8|z16|");
+    expect(textOnly(text, duplicate(["Vocal:0", "Vocal:256"]))).toEqual({
+      ok: true,
+      text: scoreOf("C4D4C4D4|z16|"),
+    });
+  });
+});
+
+function copy(
+  noteIds: ReadonlyArray<string>,
+  timeTicks: number,
+  semitones: number,
+  value: 4 | 8 | 16 | 32 = 4,
+): ScoreCommand {
+  return { type: "copyNotes", noteIds, timeTicks, semitones, grid: { value } };
+}
+
+describe("copyNotes, the Alt-drag", () => {
+  it("puts copies where the drag lands and leaves the originals alone", () => {
+    expect(textOnly(SCORE, copy(["Vocal:0"], 512, 1, 4))).toEqual({
+      ok: true,
+      text: scoreOf("C4D4^C4F4|G16|"),
+    });
+  });
+});
+
+describe("pasteNotes on a hand-worked score", () => {
+  it("puts the copied notes at the insertion point, keeping their distance, on the grid", () => {
+    const text = scoreOf("C4D4E4F4|z16|");
+    const notes = [
+      { voice: "Vocal", start: 0, duration: 256, midi: 60 },
+      { voice: "Vocal", start: 256, duration: 256, midi: 62 },
+    ];
+    expect(textOnly(text, paste(notes, 1024, 4))).toEqual({
+      ok: true,
+      text: scoreOf("C4D4E4F4|C4D4z8|"),
+    });
+  });
+});
+
+interface SampleFact {
+  file: string;
+}
+
+const directory = new URL("../packages/score-dialect-yue2/tests/", import.meta.url);
+const facts = JSON.parse(readFileSync(new URL("samples.json", directory), "utf8")) as SampleFact[];
+
+function gridFor(score: Score): { value: 4 | 8 | 16 | 32; step: number } | null {
+  const unitTicks = score.unitTicks;
+  if (unitTicks === undefined) return null;
+  for (const value of [16, 8, 4, 32] as const) {
+    const step = (4 * 256) / value;
+    const units = step / unitTicks;
+    if (Number.isInteger(units) && yue2Dialect.constraints.durations.includes(units)) return { value, step };
+  }
+  return null;
+}
+
+function barAt(score: Score, tick: number): number {
+  let found = 0;
+  for (const bar of score.bars) if (bar.start <= tick) found = bar.index;
+  return found;
+}
+
+function snapped(tick: number, step: number): number {
+  return Math.round(tick / step) * step + 0;
+}
+
+/** Asserts the promises every placing command makes on one score and the spans the command is contracted to put there. */
+function exercisePlaced(
+  label: string,
+  text: string,
+  input: Score,
+  before: ReturnType<typeof splitBars>,
+  command: ScoreCommand,
+  expected: ReadonlyArray<{ voice: string; start: number; end: number; midi: number }>,
+  step: number,
+): void {
+  const result = textOnly(text, command);
+  expect(result.ok, `${label}: ${result.ok ? "" : result.diagnostic.code}`).toBe(true);
+  if (!result.ok) return;
+  // applyScoreCommand already ran the dialect's check on the text it wrote.
+  const output = parse(result.text);
+
+  const touchedBars = new Set<string>();
+  const affected = new Set<string>();
+  for (const span of expected) {
+    expect(span.start % step, `${label}: a start on the grid`).toBe(0);
+    for (let bar = barAt(input, span.start); bar < input.bars.length; bar += 1) {
+      const found = input.bars[bar];
+      if (found === undefined || found.start >= span.end) break;
+      touchedBars.add(`${span.voice}:${bar}`);
+    }
+    for (const note of input.notes) {
+      if (note.voice !== span.voice) continue;
+      if (note.start < span.end && note.start + note.duration > span.start) {
+        // A removed or shortened note carries its whole tie chain with it, and every bar of that chain is touched.
+        for (const member of chainAround(input, note.id)) {
+          affected.add(member.id);
+          touchedBars.add(`${member.voice}:${member.bar}`);
+        }
+      }
+    }
+  }
+
+  const after = splitBars(result.text);
+  // One Z, Z2, Z3 or Z4 writes several bars; a rewrite of one bar rewrites the whole run, so a touched bar
+  // touches every bar that run carries.
+  const wholeRestRuns: string[][] = [];
+  for (const [key, piece] of before.pieces) {
+    const run = /^Z([234])$/.exec(piece.trim());
+    if (run === null) continue;
+    const [runVoice = "", barText = ""] = key.split(":");
+    const first = Number(barText);
+    wholeRestRuns.push(Array.from({ length: Number(run[1]) }, (_item, offset) => `${runVoice}:${first + offset}`));
+  }
+  for (const run of wholeRestRuns) {
+    if (!run.some((key) => touchedBars.has(key))) continue;
+    for (const key of run) touchedBars.add(key);
+  }
+  for (const [key, piece] of before.pieces) {
+    if (touchedBars.has(key)) continue;
+    expect(after.pieces.get(key), `${label}: untouched bar ${key}`).toBe(piece);
+  }
+  expect(after.otherLines, `${label}: non-music lines`).toEqual(before.otherLines);
+
+  for (const note of input.notes) {
+    if (affected.has(note.id)) continue;
+    expect(
+      output.notes.find((candidate) => candidate.id === note.id),
+      `${label}: untouched ${note.id}`,
+    ).toMatchObject({
+      voice: note.voice,
+      start: note.start,
+      duration: note.duration,
+      midi: note.midi,
+      tie: note.tie,
+    });
+  }
+
+  for (const voice of output.voices) {
+    const notes = output.notes.filter((note) => note.voice === voice).sort((left, right) => left.start - right.start);
+    for (let index = 1; index < notes.length; index += 1) {
+      const previous = notes[index - 1] as ScoreNote;
+      const note = notes[index] as ScoreNote;
+      expect(note.start, `${label}: ${voice} one note at a time at ${note.id}`).toBeGreaterThanOrEqual(
+        previous.start + previous.duration,
+      );
+    }
+  }
+
+  for (const span of expected) {
+    const at = output.notes.find(
+      (note) => note.voice === span.voice && note.start === span.start && note.midi === span.midi,
+    );
+    expect(at, `${label}: the placed note at ${span.voice}:${span.start}`).toBeDefined();
+    if (at === undefined) continue;
+    const chain = chainAround(output, at.id);
+    const first = chain[0] as ScoreNote;
+    const last = chain[chain.length - 1] as ScoreNote;
+    expect(last.start + last.duration - first.start, `${label}: the placed length`).toBe(span.end - span.start);
+  }
+}
+
+/** One spread target of one voice, with its whole tie-chain span. */
+function targetOf(score: Score, id: string): { note: ScoreNote; start: number; end: number; midi: number } | null {
+  const note = score.notes.find((candidate) => candidate.id === id);
+  if (note === undefined || note.midi === null) return null;
+  const chain = chainAround(score, note.id);
+  const first = chain[0] as ScoreNote;
+  const last = chain[chain.length - 1] as ScoreNote;
+  return { note, start: first.start, end: last.start + last.duration, midi: first.midi as number };
+}
+
+/** Several targets for every placing command on one sample, with a success in every voice and a near-end refusal. */
+function exerciseSample(file: string): void {
+  const text = readFileSync(new URL(`samples/${file}`, directory), "utf8");
+  const input = parse(text);
+  const before = splitBars(text);
+  const grid = gridFor(input);
+  if (grid === null) return;
+  const step = grid.step;
+  const last = input.bars[input.bars.length - 1];
+  if (last === undefined) return;
+  const scoreEnd = last.start + last.length;
+  const voices = input.voices.filter((voice) => pitched(input, voice).length > 0);
+  if (voices.length === 0) return;
+
+  const firstIds = voices.map((voice) => (pitched(input, voice)[0] as ScoreNote).id);
+  const allPitched = input.notes.filter((note) => note.midi !== null).sort((left, right) => left.start - right.start);
+  const middleId = allPitched[Math.floor(allPitched.length / 2)]?.id;
+  const lastId = allPitched[allPitched.length - 1]?.id;
+  // RULES.md W14/W16: a note command may not land in the cut measure or after a voice that stopped early.
+  const cutStart = input.truncation === null ? scoreEnd : (input.bars[input.truncation.bar]?.start ?? scoreEnd);
+  const safeEnd = input.voices.reduce((end, voice) => {
+    let count = input.truncation?.voice === voice ? input.truncation.bar : 0;
+    if (input.truncation?.voice !== voice) {
+      for (const note of input.notes) if (note.voice === voice && note.bar + 1 > count) count = note.bar + 1;
+    }
+    return count > 0 && count < input.bars.length ? Math.min(end, (input.bars[count] as { start: number }).start) : end;
+  }, cutStart);
+  const ids = [...new Set([...firstIds, middleId, lastId].filter((id): id is string => id !== undefined))].filter(
+    (id) => (input.notes.find((note) => note.id === id)?.start ?? Infinity) < safeEnd,
+  );
+
+  const sourceOf = (voice: string) => {
+    const source = pitched(input, voice)[0] as ScoreNote;
+    const chain = chainAround(input, source.id);
+    const first = chain[0] as ScoreNote;
+    const lastOf = chain[chain.length - 1] as ScoreNote;
+    return {
+      note: source,
+      voice,
+      start: first.start,
+      duration: lastOf.start + lastOf.duration - first.start,
+      midi: first.midi as number,
+    };
+  };
+
+  for (const [name, commandOf] of [
+    [
+      "add",
+      (voice: string, target: { start: number; midi: number }) => {
+        const start = snapped(target.start, step);
+        return {
+          command: add(voice, target.start, target.midi, grid.value),
+          expected: [{ voice, start, end: start + step, midi: target.midi }],
+        };
+      },
+    ],
+    [
+      "paste",
+      (voice: string, target: { start: number; midi: number }) => {
+        const source = sourceOf(voice);
+        const start = snapped(target.start, step);
+        const end = Math.max(start + step, snapped(target.start + source.duration, step));
+        return {
+          command: paste([source], target.start, grid.value),
+          expected: [{ voice, start, end, midi: source.midi }],
+        };
+      },
+    ],
+    [
+      "duplicate",
+      (voice: string, target: { note: ScoreNote; start: number; end: number; midi: number }) => {
+        const offset = Math.max(step, snapped(target.end, step) - snapped(target.start, step));
+        const start = snapped(target.start + offset, step);
+        const end = Math.max(start + step, snapped(target.end + offset, step));
+        return {
+          command: duplicate([target.note.id], grid.value),
+          expected: [{ voice, start, end, midi: target.midi }],
+        };
+      },
+    ],
+    [
+      "copy",
+      (voice: string, target: { note: ScoreNote; start: number; end: number; midi: number }) => {
+        const start = snapped(target.start + step, step);
+        const end = start + (target.end - target.start);
+        return {
+          command: copy([target.note.id], step, 1, grid.value),
+          expected: [{ voice, start, end, midi: target.midi + 1 }],
+        };
+      },
+    ],
+  ] as const) {
+    const succeeded = new Set<string>();
+    let tried = 0;
+    for (const id of ids) {
+      const target = targetOf(input, id);
+      if (target === null) continue;
+      const voice = target.note.voice;
+      const { command, expected } = commandOf(voice, target);
+      tried += 1;
+      const span = expected[0] as { voice: string; start: number; end: number; midi: number };
+      if (span.end > scoreEnd) {
+        expectProjectRefused(`${file}: ${name} near the end`, text, command, "note-past-end");
+        continue;
+      }
+      exercisePlaced(`${file}: ${name} ${span.start}`, text, input, before, command, expected, step);
+      succeeded.add(voice);
+    }
+    expect(tried, `${file}: ${name} tried several targets`).toBeGreaterThan(1);
+    expect([...succeeded].sort(), `${file}: ${name} succeeded in every voice`).toEqual([...voices].sort());
+
+    // A target at the very end is a refusal for add, paste and copy, leaving the bytes unchanged. Duplicate's
+    // near-end target is the last note in the loop above; it refuses when its copy would run past the end.
+    if (name !== "duplicate") {
+      const first = sourceOf(voices[0] as string);
+      expectProjectRefused(
+        `${file}: ${name} at the end`,
+        text,
+        name === "add"
+          ? add(first.voice, scoreEnd, first.midi, grid.value)
+          : name === "paste"
+            ? paste([first], scoreEnd, grid.value)
+            : copy([first.note.id], scoreEnd, 0, grid.value),
+        "note-past-end",
+      );
+    }
+  }
+}
+
+describe("placing on every sample: untouched bars, one note a time, the target reached", () => {
+  for (const fact of facts) {
+    it(`${fact.file}: the sweep holds every invariant`, { timeout: SAMPLE_SWEEP_TIMEOUT }, () => {
+      exerciseSample(fact.file);
+    });
+  }
+});
+
+/** The project the command is applied to; the bytes before and after are compared by identity. */
+function projectWith(score: string) {
+  return {
+    style: "",
+    lyrics: "",
+    score,
+    scoreMode: "full" as const,
+    seed: null,
+    modelId: "yue2",
+    sourceKey: "place-notes-test",
+  };
+}
+
+/** Applies a command through the project entry, which also runs the score entry, and holds the project to its bytes. */
+function expectProjectRefused(label: string, text: string, command: ScoreCommand, code: string): void {
+  const project = projectWith(text);
+  const result = applyProjectCommand(yue2Dialect, project, command);
+  expect(result.diagnostics[0]?.code, label).toBe(code);
+  expect(result.project, `${label}: unchanged`).toBe(project);
+}
+
+/** Applies a command that must be refused and holds the score and the project to their bytes. */
+function expectPlaceRefused(label: string, text: string, command: ScoreCommand, code: string): void {
+  const result = textOnly(text, command);
+  expect(result.ok, label).toBe(false);
+  if (!result.ok) expect(result.diagnostic.code, label).toBe(code);
+  const project = projectWith(text);
+  expect(applyProjectCommand(yue2Dialect, project, command).project, `${label}: unchanged`).toBe(project);
+}
+
+describe("the placing commands' refusals leave the score as it was", () => {
+  it("refuses a pitch outside MIDI's range", () => {
+    expectPlaceRefused(
+      "pitch",
+      SCORE,
+      { type: "addNote", voice: "Vocal", start: 0, midi: 128, grid: { value: 4 } },
+      "pitch-out-of-range",
+    );
+  });
+
+  it("refuses a grid the score's written unit cannot make", () => {
+    expectPlaceRefused(
+      "grid",
+      SCORE,
+      { type: "addNote", voice: "Vocal", start: 0, midi: 60, grid: { value: 32 } },
+      "grid-not-allowed",
+    );
+  });
+
+  it("refuses a note that would start before the score or end past it", () => {
+    expectPlaceRefused(
+      "before",
+      SCORE,
+      { type: "addNote", voice: "Vocal", start: -256, midi: 60, grid: { value: 4 } },
+      "note-before-start",
+    );
+    expectPlaceRefused(
+      "past",
+      SCORE,
+      { type: "addNote", voice: "Vocal", start: 2048, midi: 60, grid: { value: 4 } },
+      "note-past-end",
+    );
+    expectPlaceRefused(
+      "paste past",
+      SCORE,
+      paste([{ voice: "Vocal", start: 0, duration: 512, midi: 60 }], 1792, 4),
+      "note-past-end",
+    );
+  });
+
+  it("names a note or a rest that a duplicate or a copy cannot take", () => {
+    expectPlaceRefused("missing", SCORE, duplicate(["Vocal:999"]), "note-not-found");
+    const withRest = scoreOf("C4z4D4E4|G16|");
+    expectPlaceRefused("rest", withRest, copy(["Vocal:256"], 256, 0), "not-a-note");
+  });
+
+  it("refuses an offset that is not a whole number of ticks", () => {
+    expectPlaceRefused("fraction", SCORE, copy(["Vocal:0"], 0.5, 0), "offset-not-integer");
+  });
+});

@@ -1,0 +1,386 @@
+// ABOUTME: The lyric model on a song project: phrase binding, legacy layout, syllable counting and the joined lyrics text.
+// ABOUTME: Alignment is computed from the score and a line, so only the line's text and bar binding are ever stored.
+import type { LyricLine, LyricPhrase, Note, Score, Section } from "./score";
+
+export type { LyricLine, LyricPhrase } from "./score";
+
+/** The editor's own limit on the joined lyrics, in characters. */
+export const LYRICS_MAX_CHARACTERS = 4000;
+
+/** One syllable and the score note it is sung on, when the counts are equal. */
+export interface LyricSyllableNote {
+  readonly syllable: string;
+  readonly note: Note;
+}
+
+/** The syllable count, the note onsets and whether a line's phrase fits them. */
+export interface LyricAlignment {
+  readonly syllables: ReadonlyArray<string>;
+  readonly onsets: ReadonlyArray<Note>;
+  /** True when the syllable count equals the onset count. */
+  readonly equal: boolean;
+  /** One note per syllable when `equal`; `null` otherwise. */
+  readonly notes: ReadonlyArray<LyricSyllableNote> | null;
+}
+
+/** The index of the section that holds a 0-based bar, or -1 when no section does. */
+export function sectionIndexAt(score: Score, bar: number): number {
+  return score.sections.findIndex((section) => bar >= section.firstBar && bar < section.firstBar + section.barCount);
+}
+
+/** Clips a run of bars, first through last inclusive, to the section that holds its first bar. */
+export function clipPhraseToSection(score: Score, firstBar: number, lastBar: number): LyricPhrase | null {
+  const first = Math.max(0, Math.floor(firstBar));
+  const last = Math.floor(lastBar);
+  if (last < first || first >= score.bars.length) return null;
+  const section = score.sections[sectionIndexAt(score, first)];
+  if (section === undefined) return null;
+  const start = Math.max(first, section.firstBar);
+  const end = Math.min(last + 1, section.firstBar + section.barCount, score.bars.length);
+  return end <= start ? null : { firstBar: start, barCount: end - start };
+}
+
+function clampPhrase(score: Score, phrase: LyricPhrase): LyricPhrase | null {
+  const first = Math.max(0, Math.floor(phrase.firstBar));
+  const count = Math.max(0, Math.floor(phrase.barCount));
+  return count === 0 ? null : clipPhraseToSection(score, first, first + count - 1);
+}
+
+/** The label on a lyrics line, or `null` when the line is a lyric line rather than a `[section]` label. */
+export function lyricLabelName(line: string): string | null {
+  const match = /^[ \t]*\[([^\]\r\n]+)\][ \t]*$/.exec(line);
+  if (match === null) return null;
+  const name = (match[1] as string).trim();
+  return name === "" ? null : name;
+}
+
+/** Why a phrase does not fit the score's first invariant, or `null` when it does. */
+export type LyricPhraseProblem = "not-integer" | "empty" | "outside-score" | "cross-section";
+
+/**
+ * A phrase is one or more whole, consecutive bars inside the score and inside one section. This says which part of that
+ * is wrong, so a refusal can name the reason; it does not clip or repair the phrase.
+ */
+export function lyricPhraseProblem(score: Score, phrase: LyricPhrase): LyricPhraseProblem | null {
+  if (!Number.isInteger(phrase.firstBar) || !Number.isInteger(phrase.barCount)) return "not-integer";
+  if (phrase.barCount < 1) return "empty";
+  const last = phrase.firstBar + phrase.barCount - 1;
+  if (phrase.firstBar < 0 || last >= score.bars.length) return "outside-score";
+  const firstSection = sectionIndexAt(score, phrase.firstBar);
+  const lastSection = sectionIndexAt(score, last);
+  if (firstSection < 0 || lastSection < 0) return "outside-score";
+  return firstSection === lastSection ? null : "cross-section";
+}
+
+interface LegacyGroup {
+  readonly name: string | null;
+  readonly lines: string[];
+}
+
+/** One way to split a run of bars into one phrase per line: its misalignment cost and its lengths in line order. */
+interface PhraseSplit {
+  readonly cost: number;
+  readonly squareLengths: number;
+  readonly lengths: ReadonlyArray<number>;
+}
+
+/** The tie-break a phrase split needs: lowest cost, then most even lengths, then the earliest boundaries. */
+function comparePhraseSplits(left: PhraseSplit, right: PhraseSplit): number {
+  if (left.cost !== right.cost) return left.cost - right.cost;
+  if (left.squareLengths !== right.squareLengths) return left.squareLengths - right.squareLengths;
+  for (let index = 0; index < left.lengths.length; index += 1) {
+    const difference = (left.lengths[index] as number) - (right.lengths[index] as number);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+/**
+ * The phrase lengths for one section's lines, chosen over every way to split `firstBar` through `endBar - 1` into one
+ * non-empty run per line. Cost is the sum of |line syllables - phrase onsets|; ties prefer even lengths, then the
+ * earliest boundaries.
+ */
+function phraseLengths(
+  score: Score,
+  firstBar: number,
+  endBar: number,
+  lines: ReadonlyArray<string>,
+): ReadonlyArray<number> {
+  const count = lines.length;
+  const bars = endBar - firstBar;
+  if (count === 0) return [];
+  if (count > bars) return [];
+  const syllables = lines.map((text) => lyricSyllables(text).length);
+  const splits: (PhraseSplit | null)[][] = Array.from({ length: bars + 1 }, () =>
+    Array<PhraseSplit | null>(count + 1).fill(null),
+  );
+  (splits[0] as (PhraseSplit | null)[])[0] = { cost: 0, squareLengths: 0, lengths: [] };
+
+  for (let used = 1; used <= bars; used += 1) {
+    const row = splits[used] as (PhraseSplit | null)[];
+    for (let line = 1; line <= Math.min(used, count); line += 1) {
+      let best: PhraseSplit | null = null;
+      for (let length = 1; length <= used - (line - 1); length += 1) {
+        const previous = splits[used - length]?.[line - 1] ?? null;
+        if (previous === null) continue;
+        const phrase = { firstBar: firstBar + used - length, barCount: length };
+        const candidate: PhraseSplit = {
+          cost: previous.cost + Math.abs((syllables[line - 1] as number) - noteOnsets(score, phrase).length),
+          squareLengths: previous.squareLengths + length * length,
+          lengths: [...previous.lengths, length],
+        };
+        if (best === null || comparePhraseSplits(candidate, best) < 0) best = candidate;
+      }
+      row[line] = best;
+    }
+  }
+  return (splits[bars]?.[count] ?? null)?.lengths ?? [];
+}
+
+/**
+ * Lays a legacy `lyrics` text onto a score: a label selects the first unused section with that name, and its lines are
+ * spread phrase by phrase over the section's bars, minimising the syllable-to-onset gap the way `phraseLengths` says.
+ * Lines before the first label go into the unnamed opening section, or into the first section when the score has none.
+ * When a group has more lines than bars it keeps one bar per line for the first lines; those extras, lines that do not
+ * fit and lines under a label with no section go to the unaligned area in text order.
+ */
+export function layoutLyrics(score: Score, lyrics: string): LyricLine[] {
+  const groups: LegacyGroup[] = [{ name: null, lines: [] }];
+  for (const raw of lyrics.replace(/\r\n?/g, "\n").split("\n")) {
+    const label = lyricLabelName(raw);
+    if (label !== null) {
+      groups.push({ name: label, lines: [] });
+    } else if (raw.trim() !== "") {
+      (groups[groups.length - 1] as LegacyGroup).lines.push(raw);
+    }
+  }
+
+  const used = new Set<number>();
+  const cursors = new Map<number, number>();
+  const lines: LyricLine[] = [];
+  const unaligned: LyricLine[] = [];
+  const place = (sectionIndex: number, group: LegacyGroup): void => {
+    const section = score.sections[sectionIndex] as Section;
+    const start = cursors.get(sectionIndex) ?? section.firstBar;
+    const end = section.firstBar + section.barCount;
+    const available = end - start;
+    if (group.lines.length === 0) return;
+    if (group.lines.length > available) {
+      group.lines.forEach((text, index) => {
+        if (index < available) lines.push({ text, phrase: { firstBar: start + index, barCount: 1 } });
+        else unaligned.push({ text, phrase: null });
+      });
+      cursors.set(sectionIndex, end);
+      return;
+    }
+    let bar = start;
+    for (const [index, length] of phraseLengths(score, start, end, group.lines).entries()) {
+      lines.push({ text: group.lines[index] as string, phrase: { firstBar: bar, barCount: length } });
+      bar += length;
+    }
+    cursors.set(sectionIndex, bar);
+  };
+
+  const preamble = groups[0] as LegacyGroup;
+  if (preamble.lines.length > 0 && score.sections[0] !== undefined) place(0, preamble);
+
+  for (const group of groups.slice(1)) {
+    const label = (group.name as string).trim().toLowerCase();
+    const index = score.sections.findIndex(
+      (section, candidate) =>
+        !used.has(candidate) && section.name !== null && section.name.trim().toLowerCase() === label,
+    );
+    if (index < 0) {
+      unaligned.push(...group.lines.map((text) => ({ text, phrase: null })));
+      continue;
+    }
+    used.add(index);
+    place(index, group);
+  }
+  return [...lines, ...unaligned];
+}
+
+/** The lines a project carries: its stored lines, or the layout computed from a legacy `lyrics` text. */
+export function lyricLinesOf(
+  project: { readonly lyrics: string; readonly lyricLines?: ReadonlyArray<LyricLine> },
+  score: Score,
+): ReadonlyArray<LyricLine> {
+  return project.lyricLines ?? layoutLyrics(score, project.lyrics);
+}
+
+/** Lines bound to a phrase that fits the score, in stored order. Without a score, a bound phrase counts as aligned. */
+export function alignedLyricLines(lines: ReadonlyArray<LyricLine>, score?: Score): ReadonlyArray<LyricLine> {
+  return lines.filter(
+    (line) => line.phrase !== null && (score === undefined || lyricPhraseProblem(score, line.phrase) === null),
+  );
+}
+
+/** Lines in the unaligned area, in stored order: no phrase, or one that no longer fits the score. */
+export function unalignedLyricLines(lines: ReadonlyArray<LyricLine>, score?: Score): ReadonlyArray<LyricLine> {
+  return lines.filter(
+    (line) => line.phrase === null || (score !== undefined && lyricPhraseProblem(score, line.phrase) !== null),
+  );
+}
+
+/**
+ * The `lyrics` text a project writes: section order, a `[name]` label before each named section's lines, and no label
+ * for the unnamed opening section. A named empty section keeps its label; the unnamed empty section writes nothing.
+ * Lines in the unaligned area are not part of the text.
+ */
+export function joinLyrics(score: Score, lines: ReadonlyArray<LyricLine>): string {
+  const parts: string[] = [];
+  for (const section of score.sections) {
+    const inSection = lines
+      .filter(
+        (line) =>
+          line.phrase !== null &&
+          lyricPhraseProblem(score, line.phrase) === null &&
+          line.phrase.firstBar >= section.firstBar &&
+          line.phrase.firstBar < section.firstBar + section.barCount,
+      )
+      .sort((left, right) => (left.phrase?.firstBar ?? 0) - (right.phrase?.firstBar ?? 0));
+    if (section.name !== null) parts.push(`[${section.name}]`);
+    for (const line of inSection) parts.push(line.text);
+  }
+  return parts.join("\n");
+}
+
+/** Characters in a lyrics text, counted as Unicode code points, line breaks included. */
+export function lyricCharacterCount(text: string): number {
+  return Array.from(text).length;
+}
+
+const LATIN = /\p{Script=Latin}/u;
+const LETTER = /[\p{L}\p{N}]/u;
+const MARK = /\p{M}/u;
+const VOWELS = "aeiou";
+
+function isLatinLetter(char: string): boolean {
+  return LATIN.test(char);
+}
+
+function isVowelAt(word: ReadonlyArray<string>, index: number): boolean {
+  const char = (word[index] as string).toLowerCase();
+  if (VOWELS.includes(char)) return true;
+  if (char !== "y") return false;
+  const before = word[index - 1]?.toLowerCase() ?? "";
+  const after = word[index + 1]?.toLowerCase() ?? "";
+  return !(before !== "" && VOWELS.includes(before)) && !(after !== "" && VOWELS.includes(after));
+}
+
+/** Splits one Latin word into estimated syllables by vowel groups; a word with no vowel group is one syllable. */
+function latinSyllables(word: string): string[] {
+  // The written vowel run in "quiet" reads as one group, but it is sung qui-et.
+  if (word.toLowerCase() === "quiet") return ["qui", "et"];
+  const chars = Array.from(word);
+  const groups: Array<{ start: number; end: number }> = [];
+  for (let index = 0; index < chars.length; index += 1) {
+    if (isVowelAt(chars, index)) {
+      const last = groups[groups.length - 1];
+      if (last !== undefined && last.end === index - 1) last.end = index;
+      else groups.push({ start: index, end: index });
+    }
+  }
+  if (groups.length === 0) return [word];
+  const pieces: string[] = [];
+  let start = 0;
+  for (let index = 0; index < groups.length - 1; index += 1) {
+    const group = groups[index] as { start: number; end: number };
+    const next = groups[index + 1] as { start: number; end: number };
+    const boundary = Math.max(group.end + 1, next.start - 1);
+    if (boundary <= start || boundary >= chars.length) continue;
+    pieces.push(chars.slice(start, boundary).join(""));
+    start = boundary;
+  }
+  pieces.push(chars.slice(start).join(""));
+  return pieces.filter((piece) => piece !== "");
+}
+
+/**
+ * The syllable units of a lyrics text. Han characters, kana, other letters and digits count one each, with a combining
+ * mark staying on its base; a Latin word is split by vowel groups and a hyphen splits a word by hand. Spaces and
+ * punctuation are not sung and count nothing.
+ */
+export function lyricSyllables(text: string): string[] {
+  const syllables: string[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const codePoint = text.codePointAt(index);
+    if (codePoint === undefined) break;
+    const char = String.fromCodePoint(codePoint);
+    if (isLatinLetter(char)) {
+      let end = index + char.length;
+      let word = char;
+      while (end < text.length) {
+        const next = text.codePointAt(end);
+        if (next === undefined) break;
+        const nextChar = String.fromCodePoint(next);
+        if (isLatinLetter(nextChar) || nextChar === "'") {
+          word += nextChar;
+          end += nextChar.length;
+        } else if (MARK.test(nextChar)) {
+          word += nextChar;
+          end += nextChar.length;
+        } else {
+          break;
+        }
+      }
+      syllables.push(...latinSyllables(word));
+      index = end;
+      continue;
+    }
+    if (LETTER.test(char)) {
+      let end = index + char.length;
+      let unit = char;
+      while (end < text.length) {
+        const next = text.codePointAt(end);
+        if (next === undefined) break;
+        const nextChar = String.fromCodePoint(next);
+        if (!MARK.test(nextChar)) break;
+        unit += nextChar;
+        end += nextChar.length;
+      }
+      syllables.push(unit);
+      index = end;
+      continue;
+    }
+    index += char.length;
+  }
+  return syllables;
+}
+
+/** The number of syllables the editor estimates for a lyrics text. */
+export function syllableCount(text: string): number {
+  return lyricSyllables(text).length;
+}
+
+/** The notes a phrase starts on: `Vocal` notes in its bars that are not rests and not a tie continuation. */
+export function noteOnsets(score: Score, phrase: LyricPhrase): Note[] {
+  const clamped = clampPhrase(score, phrase);
+  if (clamped === null) return [];
+  const end = clamped.firstBar + clamped.barCount;
+  const vocal = score.notes.filter((note) => note.voice === "Vocal").sort((left, right) => left.start - right.start);
+  const onsets: Note[] = [];
+  for (let index = 0; index < vocal.length; index += 1) {
+    const note = vocal[index] as Note;
+    if (note.bar < clamped.firstBar || note.bar >= end || note.midi === null) continue;
+    const previous = vocal[index - 1];
+    const tied = previous?.tie === true && previous.start + previous.duration === note.start;
+    if (!tied) onsets.push(note);
+  }
+  return onsets;
+}
+
+/** Compares a line's syllable count with its phrase's note onsets and, when equal, gives each syllable its note. */
+export function alignLyricLine(score: Score, line: LyricLine): LyricAlignment {
+  const syllables = lyricSyllables(line.text);
+  const aligned = line.phrase !== null && lyricPhraseProblem(score, line.phrase) === null;
+  const onsets = aligned && line.phrase !== null ? noteOnsets(score, line.phrase) : [];
+  const equal = aligned && syllables.length === onsets.length;
+  return {
+    syllables,
+    onsets,
+    equal,
+    notes: equal ? syllables.map((syllable, index) => ({ syllable, note: onsets[index] as Note })) : null,
+  };
+}

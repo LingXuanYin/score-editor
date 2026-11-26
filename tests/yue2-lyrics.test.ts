@@ -1,0 +1,971 @@
+// ABOUTME: Seam 1 for lyric lines: syllables, note onsets, alignment, the legacy layout, the joined text and bar remapping.
+// ABOUTME: Expected values are worked by hand; every case goes through the two package entries.
+import { readFileSync } from "node:fs";
+import { yue2Dialect } from "@anti_entropy/score-dialect-yue2";
+import {
+  alignedLyricLines,
+  alignLyricLine,
+  applyProjectCommand,
+  checkProject,
+  joinLyrics,
+  LYRICS_MAX_CHARACTERS,
+  type LyricLine,
+  layoutLyrics,
+  lyricCharacterCount,
+  lyricLinesOf,
+  lyricSyllables,
+  noteOnsets,
+  type Score,
+  type ScoreCommand,
+  type SongProject,
+  syllableCount,
+  unalignedLyricLines,
+} from "@anti_entropy/score-editor";
+import { describe, expect, it } from "vitest";
+import { SAMPLE_SWEEP_TIMEOUT } from "./yue2-support";
+
+const HEADER = `X:1
+T:
+M:4/4
+L:1/16
+Q:1/4=120
+V: Vocal clef=treble name="Vocal Melody" snm="Vocal"
+V: Ins clef=treble name="Ins Melody" snm="Inst."`;
+
+const ONE_VOICE = `X:1
+T:
+M:4/4
+L:1/16
+Q:1/4=120
+V: Vocal clef=treble name="Vocal Melody" snm="Vocal"`;
+
+// The real generation and request lyrics: the score's sections are lowercase, the request's labels are not.
+const MORNING_WALK_SCORE = readFileSync(new URL("fixtures/morning-walk.abc", import.meta.url), "utf8");
+const MORNING_WALK_LYRICS = readFileSync(new URL("fixtures/request-lyrics.txt", import.meta.url), "utf8");
+
+const SCORE = `${HEADER}
+K:C
+% Intro
+V: Vocal
+C16|D16|
+V: Ins
+Z2|
+% Verse
+V: Vocal
+E16|F16|G16|A16|
+V: Ins
+Z4|
+% Chorus
+V: Vocal
+B16|c16|
+V: Ins
+Z2|`;
+
+const TWO_FOUR_SCORE = `X:1
+T:
+M:2/4
+L:1/16
+Q:1/4=120
+V: Vocal clef=treble name="Vocal Melody" snm="Vocal"
+V: Ins clef=treble name="Ins Melody" snm="Inst."
+K:C
+% Intro
+V: Vocal
+C8|D8|
+V: Ins
+Z2|
+% Verse
+V: Vocal
+E8|F8|G8|A8|
+V: Ins
+Z4|
+% Chorus
+V: Vocal
+B8|c8|
+V: Ins
+Z2|`;
+
+const UNNAMED_SCORE = `${HEADER}
+K:C
+V: Vocal
+C16|D16|
+V: Ins
+Z2|
+% Verse
+V: Vocal
+E16|F16|G16|A16|
+V: Ins
+Z4|
+% Chorus
+V: Vocal
+B16|c16|
+V: Ins
+Z2|`;
+
+const TIE_SCORE = `${HEADER}
+K:C
+% A
+V: Vocal
+C8-C8|D8E8|
+V: Ins
+Z2|`;
+
+const CROSS_BAR_TIE = `${HEADER}
+K:C
+% A
+V: Vocal
+C8-C8-|C8D8|
+V: Ins
+Z2|`;
+
+const CUT_SCORE = `${ONE_VOICE}
+K:C
+% A
+V: Vocal
+C16|D16|
+% B
+V: Vocal
+E8`;
+
+/** Eight bars in one section, pairing into phrases of 2, 3, 4 and 5 onsets (bars 0-1, 2-3, 4-5, 6-7). */
+const PHRASE_PAIRED_SCORE = `${HEADER}
+K:C
+% verse
+V: Vocal
+C16|D16|E16|C8D8|
+V: Ins
+Z4|
+V: Vocal
+C8D8|C8D8|C8D8|C4D4E4z4|
+V: Ins
+Z4|`;
+
+/** Eight bars in one section with two onsets in every bar. */
+const PHRASE_EVEN_SCORE = `${HEADER}
+K:C
+% verse
+V: Vocal
+C8D8|C8D8|C8D8|C8D8|
+V: Ins
+Z4|
+V: Vocal
+C8D8|C8D8|C8D8|C8D8|
+V: Ins
+Z4|`;
+
+/** Eight bars whose onsets are four, none, four, none, four, none, four, none. */
+const PHRASE_TIE_SCORE = `${HEADER}
+K:C
+% verse
+V: Vocal
+C4D4E4F4|z16|C4D4E4F4|z16|
+V: Ins
+Z4|
+V: Vocal
+C4D4E4F4|z16|C4D4E4F4|z16|
+V: Ins
+Z4|`;
+
+/** The two-bar section of the "more lines than bars" case. */
+const PHRASE_TWO_BARS = `${HEADER}
+K:C
+% verse
+V: Vocal
+C16|D16|
+V: Ins
+Z2|`;
+
+/** The Morning Walk shape: two labelled sections of eight bars, four lines each, two onsets in every bar. */
+const PHRASE_MORNING_SCORE = `${HEADER}
+K:C
+% verse
+V: Vocal
+C8D8|C8D8|C8D8|C8D8|
+V: Ins
+Z4|
+V: Vocal
+C8D8|C8D8|C8D8|C8D8|
+V: Ins
+Z4|
+% chorus
+V: Vocal
+C8D8|C8D8|C8D8|C8D8|
+V: Ins
+Z4|
+V: Vocal
+C8D8|C8D8|C8D8|C8D8|
+V: Ins
+Z4|`;
+
+function parse(text: string): Score {
+  const { score, diagnostics } = yue2Dialect.parse(text);
+  expect(diagnostics).toEqual([]);
+  if (score === null) throw new Error("the score did not read");
+  return score;
+}
+
+function project(overrides: Partial<SongProject> = {}): SongProject {
+  return {
+    style: "pop",
+    lyrics: "",
+    score: SCORE,
+    scoreMode: "full",
+    seed: 7,
+    modelId: "yue2",
+    sourceKey: "source",
+    ...overrides,
+  };
+}
+
+function withLines(lines: ReadonlyArray<LyricLine>, overrides: Partial<SongProject> = {}): SongProject {
+  return project({ score: SCORE, lyricLines: lines, lyrics: joinLyrics(parse(SCORE), lines), ...overrides });
+}
+
+function apply(input: SongProject, command: ScoreCommand): SongProject {
+  const result = applyProjectCommand(yue2Dialect, input, command);
+  expect(result.diagnostics, command.type).toEqual([]);
+  return result.project;
+}
+
+const LINES: ReadonlyArray<LyricLine> = [
+  { text: "intro line", phrase: { firstBar: 0, barCount: 1 } },
+  { text: "verse one", phrase: { firstBar: 2, barCount: 2 } },
+  { text: "verse two", phrase: { firstBar: 4, barCount: 2 } },
+  { text: "chorus", phrase: { firstBar: 6, barCount: 2 } },
+];
+
+const JOINED = `[Intro]
+intro line
+[Verse]
+verse one
+verse two
+[Chorus]
+chorus`;
+
+const LEGACY_LYRICS = `[Intro]
+intro line
+[Verse]
+v1
+v2
+v3
+v4
+[Chorus]
+c1
+c2`;
+
+describe("syllables", () => {
+  it("counts Han characters and kana one each", () => {
+    expect(syllableCount("你好世界")).toBe(4);
+    expect(syllableCount("こんにちは")).toBe(5);
+    expect(syllableCount("カタカナ")).toBe(4);
+  });
+
+  it("counts an English word by vowel groups, with a manual hyphen split", () => {
+    expect(syllableCount("hello world")).toBe(3);
+    expect(syllableCount("beautiful")).toBe(3);
+    expect(syllableCount("hel-lo")).toBe(2);
+    expect(syllableCount("yellow")).toBe(2);
+    expect(syllableCount("happy")).toBe(2);
+    expect(syllableCount("rhythm")).toBe(1);
+    expect(lyricSyllables("hello")).toEqual(["hel", "lo"]);
+    expect(lyricSyllables("hel-lo")).toEqual(["hel", "lo"]);
+  });
+
+  it("counts quiet as the two syllables it is sung as, and the sample line as eight", () => {
+    expect(lyricSyllables("quiet")).toEqual(["qui", "et"]);
+    expect(syllableCount("Coffee steam and a quiet song")).toBe(8);
+  });
+
+  it("does not sing spaces or punctuation and counts digits one by one", () => {
+    expect(syllableCount("你好，世界！")).toBe(4);
+    expect(syllableCount("Hi, 2024!")).toBe(5);
+    expect(syllableCount("   ")).toBe(0);
+    expect(syllableCount("...")).toBe(0);
+  });
+});
+
+describe("note onsets and alignment", () => {
+  it("counts Vocal notes that are not rests and not tied from the note before", () => {
+    const score = parse(TIE_SCORE);
+    expect(noteOnsets(score, { firstBar: 0, barCount: 1 }).map((note) => note.start)).toEqual([0]);
+    expect(noteOnsets(score, { firstBar: 1, barCount: 1 }).map((note) => note.start)).toEqual([1024, 1536]);
+    expect(noteOnsets(score, { firstBar: 0, barCount: 2 }).map((note) => note.start)).toEqual([0, 1024, 1536]);
+  });
+
+  it("excludes a continuation tied in from the bar before the phrase", () => {
+    const score = parse(CROSS_BAR_TIE);
+    expect(noteOnsets(score, { firstBar: 1, barCount: 1 }).map((note) => note.start)).toEqual([1536]);
+  });
+
+  it("gives each syllable its note when the counts are equal, and no notes when they are not", () => {
+    const score = parse(TIE_SCORE);
+    const equal = alignLyricLine(score, { text: "一 二 三", phrase: { firstBar: 0, barCount: 2 } });
+    expect(equal.syllables).toEqual(["一", "二", "三"]);
+    expect(equal.equal).toBe(true);
+    expect(equal.notes?.map((entry) => [entry.syllable, entry.note.start])).toEqual([
+      ["一", 0],
+      ["二", 1024],
+      ["三", 1536],
+    ]);
+
+    const unequal = alignLyricLine(score, { text: "一二", phrase: { firstBar: 0, barCount: 2 } });
+    expect(unequal.equal).toBe(false);
+    expect(unequal.notes).toBeNull();
+    expect(unequal.onsets).toHaveLength(3);
+  });
+
+  it("gives an unaligned line no onsets and an unequal count", () => {
+    const alignment = alignLyricLine(parse(TIE_SCORE), { text: "一二", phrase: null });
+    expect(alignment.onsets).toEqual([]);
+    expect(alignment.equal).toBe(false);
+  });
+});
+
+describe("the legacy layout", () => {
+  it("keeps one bar per line when the group fills its section and spreads a shorter group", () => {
+    const score = parse(SCORE);
+    const lines = layoutLyrics(score, "[Verse]\nv1\nv2\nv3\nv4\nv5\n[Chorus]\nc1\n[Missing]\nm1\nm2");
+
+    expect(lines.slice(0, 5)).toEqual([
+      { text: "v1", phrase: { firstBar: 2, barCount: 1 } },
+      { text: "v2", phrase: { firstBar: 3, barCount: 1 } },
+      { text: "v3", phrase: { firstBar: 4, barCount: 1 } },
+      { text: "v4", phrase: { firstBar: 5, barCount: 1 } },
+      { text: "c1", phrase: { firstBar: 6, barCount: 2 } },
+    ]);
+    expect(unalignedLyricLines(lines, score).map((line) => line.text)).toEqual(["v5", "m1", "m2"]);
+    expect(lines.filter((line) => line.phrase?.firstBar === 0 || line.phrase?.firstBar === 1)).toEqual([]);
+  });
+
+  it("lays the request lyrics on its score though the labels differ in letter case", () => {
+    const score = parse(MORNING_WALK_SCORE);
+    const lines = layoutLyrics(score, MORNING_WALK_LYRICS);
+    expect(unalignedLyricLines(lines, score)).toEqual([]);
+    expect(joinLyrics(score, lines)).toBe(`[intro]
+[verse]
+Morning light on the station
+I wait for the first train
+Coffee steam and a quiet song
+Carry me along
+[chorus]
+Run with me, run with me
+Into the open sky
+Run with me, run with me
+We will learn to fly
+[outro]`);
+  });
+
+  it("matches a label without regard to letter case or spaces around the name", () => {
+    const text = `${HEADER}
+K:C
+% verse
+V: Vocal
+C16|D16|
+V: Ins
+Z2|
+% verse
+V: Vocal
+E16|F16|
+V: Ins
+Z2|
+% verse
+V: Vocal
+G16|A16|
+V: Ins
+Z2|`;
+    const lines = layoutLyrics(parse(text), "[Verse]\na\n[ verse ]\nb\n[VERSE]\nc");
+    expect(lines).toEqual([
+      { text: "a", phrase: { firstBar: 0, barCount: 2 } },
+      { text: "b", phrase: { firstBar: 2, barCount: 2 } },
+      { text: "c", phrase: { firstBar: 4, barCount: 2 } },
+    ]);
+  });
+
+  it("puts lines before the first label in the unnamed opening section, and skips empty lines", () => {
+    const lines = layoutLyrics(parse(UNNAMED_SCORE), "pre\n[Verse]\n\nv1\nv2");
+
+    expect(lines).toEqual([
+      { text: "pre", phrase: { firstBar: 0, barCount: 2 } },
+      { text: "v1", phrase: { firstBar: 2, barCount: 2 } },
+      { text: "v2", phrase: { firstBar: 4, barCount: 2 } },
+    ]);
+  });
+
+  it("puts lines before the first label in the first section when there is no unnamed opening section", () => {
+    const lines = layoutLyrics(parse(SCORE), "pre\n[Verse]\nv1");
+    expect(lines).toEqual([
+      { text: "pre", phrase: { firstBar: 0, barCount: 2 } },
+      { text: "v1", phrase: { firstBar: 2, barCount: 4 } },
+    ]);
+  });
+
+  it("matches each repeated label to the next unused section with that name", () => {
+    const text = `${HEADER}
+K:C
+% Verse
+V: Vocal
+C16|D16|
+V: Ins
+Z2|
+% Verse
+V: Vocal
+E16|F16|
+V: Ins
+Z2|`;
+    const lines = layoutLyrics(parse(text), "[Verse]\na\n[Verse]\nb");
+    expect(lines).toEqual([
+      { text: "a", phrase: { firstBar: 0, barCount: 2 } },
+      { text: "b", phrase: { firstBar: 2, barCount: 2 } },
+    ]);
+  });
+
+  it("computes the layout without writing it into the project", () => {
+    const input = project({ lyrics: "[Verse]\nv1" });
+    const before = JSON.stringify(input);
+    const lines = lyricLinesOf(input, parse(input.score));
+    expect(lines).toEqual([{ text: "v1", phrase: { firstBar: 2, barCount: 4 } }]);
+    expect(JSON.stringify(input)).toBe(before);
+    expect("lyricLines" in input).toBe(false);
+  });
+});
+
+describe("the phrase layout of a legacy text", () => {
+  it("puts four lines over the four paired phrases whose onsets equal their syllables", () => {
+    const score = parse(PHRASE_PAIRED_SCORE);
+    const lines = layoutLyrics(score, "一二\n一二三\n一二三四\n一二三四五");
+
+    expect(lines).toEqual([
+      { text: "一二", phrase: { firstBar: 0, barCount: 2 } },
+      { text: "一二三", phrase: { firstBar: 2, barCount: 2 } },
+      { text: "一二三四", phrase: { firstBar: 4, barCount: 2 } },
+      { text: "一二三四五", phrase: { firstBar: 6, barCount: 2 } },
+    ]);
+    expect(lines.map((line) => alignLyricLine(score, line).onsets.length)).toEqual([2, 3, 4, 5]);
+    expect(lines.every((line) => alignLyricLine(score, line).equal)).toBe(true);
+  });
+
+  it("follows the syllable counts into uneven phrases of one, three, two and two bars", () => {
+    const score = parse(PHRASE_EVEN_SCORE);
+    const lines = layoutLyrics(score, "一二\n一二三四五六\n一二三四\n一二三四");
+
+    expect(lines).toEqual([
+      { text: "一二", phrase: { firstBar: 0, barCount: 1 } },
+      { text: "一二三四五六", phrase: { firstBar: 1, barCount: 3 } },
+      { text: "一二三四", phrase: { firstBar: 4, barCount: 2 } },
+      { text: "一二三四", phrase: { firstBar: 6, barCount: 2 } },
+    ]);
+    expect(lines.every((line) => alignLyricLine(score, line).equal)).toBe(true);
+  });
+
+  it("breaks an equal-count tie with the even split", () => {
+    const score = parse(PHRASE_TIE_SCORE);
+    const lines = layoutLyrics(score, "一二三四\n一二三四\n一二三四\n一二三四");
+
+    expect(lines).toEqual([
+      { text: "一二三四", phrase: { firstBar: 0, barCount: 2 } },
+      { text: "一二三四", phrase: { firstBar: 2, barCount: 2 } },
+      { text: "一二三四", phrase: { firstBar: 4, barCount: 2 } },
+      { text: "一二三四", phrase: { firstBar: 6, barCount: 2 } },
+    ]);
+    expect(lines.every((line) => alignLyricLine(score, line).equal)).toBe(true);
+  });
+
+  it("gives one line the whole section", () => {
+    const lines = layoutLyrics(parse(PHRASE_PAIRED_SCORE), "一二三");
+
+    expect(lines).toEqual([{ text: "一二三", phrase: { firstBar: 0, barCount: 8 } }]);
+  });
+
+  it("keeps the first bars for the lines and sends the rest to the unaligned area when lines outnumber bars", () => {
+    const lines = layoutLyrics(parse(PHRASE_TWO_BARS), "a\nb\nc\nd");
+
+    expect(lines).toEqual([
+      { text: "a", phrase: { firstBar: 0, barCount: 1 } },
+      { text: "b", phrase: { firstBar: 1, barCount: 1 } },
+      { text: "c", phrase: null },
+      { text: "d", phrase: null },
+    ]);
+  });
+
+  it("lays out the Morning Walk shape over both halves of each eight-bar section", () => {
+    const score = parse(PHRASE_MORNING_SCORE);
+    const lines = layoutLyrics(
+      score,
+      `[Verse]
+la la la la
+la la la la
+la la la la
+la la la la
+[Chorus]
+la la la la
+la la la la
+la la la la
+la la la la`,
+    );
+
+    expect(lines.map((line) => line.phrase)).toEqual([
+      { firstBar: 0, barCount: 2 },
+      { firstBar: 2, barCount: 2 },
+      { firstBar: 4, barCount: 2 },
+      { firstBar: 6, barCount: 2 },
+      { firstBar: 8, barCount: 2 },
+      { firstBar: 10, barCount: 2 },
+      { firstBar: 12, barCount: 2 },
+      { firstBar: 14, barCount: 2 },
+    ]);
+    expect(unalignedLyricLines(lines, score)).toEqual([]);
+    expect(lines.every((line) => alignLyricLine(score, line).equal)).toBe(true);
+  });
+
+  it("leaves lyric lines a project already stores exactly as they are", () => {
+    const stored: ReadonlyArray<LyricLine> = [
+      { text: "old", phrase: { firstBar: 0, barCount: 1 } },
+      { text: "words", phrase: { firstBar: 1, barCount: 1 } },
+    ];
+    const input = project({ lyrics: "[Verse]\nnew words", lyricLines: stored });
+
+    expect(lyricLinesOf(input, parse(input.score))).toEqual(stored);
+  });
+});
+
+describe("joining the lyrics text", () => {
+  it("writes section labels in section order, leaving the unnamed section unlabelled", () => {
+    expect(joinLyrics(parse(SCORE), LINES)).toBe(JOINED);
+    expect(
+      joinLyrics(parse(UNNAMED_SCORE), [
+        { text: "pre", phrase: { firstBar: 0, barCount: 1 } },
+        { text: "v1", phrase: { firstBar: 2, barCount: 1 } },
+      ]),
+    ).toBe("pre\n[Verse]\nv1\n[Chorus]");
+  });
+
+  it("keeps a named empty section's label and leaves the unaligned lines out", () => {
+    const score = parse(SCORE);
+    const lines: LyricLine[] = [
+      { text: "chorus", phrase: { firstBar: 6, barCount: 2 } },
+      { text: "loose", phrase: null },
+    ];
+    expect(joinLyrics(score, lines)).toBe("[Intro]\n[Verse]\n[Chorus]\nchorus");
+    expect(alignedLyricLines(lines, score).map((line) => line.text)).toEqual(["chorus"]);
+    expect(unalignedLyricLines(lines, score).map((line) => line.text)).toEqual(["loose"]);
+  });
+
+  it("counts characters as Unicode code points, line breaks included", () => {
+    expect(lyricCharacterCount("你好")).toBe(2);
+    expect(lyricCharacterCount("a\nb")).toBe(3);
+    expect(lyricCharacterCount("😀")).toBe(1);
+    expect(LYRICS_MAX_CHARACTERS).toBe(4000);
+  });
+
+  it("reports unaligned lines and a joined text over 4,000 characters as notices", () => {
+    const oneLineScore = `${ONE_VOICE}
+K:C
+V: Vocal
+C16|`;
+    expect(checkProject(yue2Dialect, project({ score: oneLineScore, lyrics: "字".repeat(4000) }))).toEqual([]);
+    const tooLong = checkProject(yue2Dialect, project({ score: oneLineScore, lyrics: "字".repeat(4001) }));
+    expect(tooLong.map((diagnostic) => diagnostic.code)).toEqual(["lyrics-too-long"]);
+    expect(tooLong[0]?.params).toEqual({ count: 4001, max: 4000 });
+
+    const unaligned = checkProject(yue2Dialect, project({ lyrics: "[Missing]\nloose" }));
+    expect(unaligned.map((diagnostic) => diagnostic.code)).toEqual(["lyrics-unaligned"]);
+    expect(unaligned[0]?.params).toEqual({ count: 1 });
+  });
+
+  it("hands stored lines to checkProject instead of laying the legacy text out again", () => {
+    const input = withLines([{ text: "loose", phrase: null }], { lyrics: "not the joined text" });
+    expect(checkProject(yue2Dialect, input).map((diagnostic) => diagnostic.code)).toEqual(["lyrics-unaligned"]);
+  });
+});
+
+describe("bar commands carry stored lines", () => {
+  it("spans an inserted bar inside a phrase and shifts the phrase after it", () => {
+    const result = apply(withLines(LINES), { type: "insertBar", bar: 3 });
+    expect(result.lyricLines).toEqual([
+      { text: "intro line", phrase: { firstBar: 0, barCount: 1 } },
+      { text: "verse one", phrase: { firstBar: 2, barCount: 3 } },
+      { text: "verse two", phrase: { firstBar: 5, barCount: 2 } },
+      { text: "chorus", phrase: { firstBar: 7, barCount: 2 } },
+    ]);
+    expect(result.lyrics).toBe(JOINED);
+  });
+
+  it("keeps a stored lyrics text that differs from the join byte for byte on a command that changes no line", () => {
+    const lines: LyricLine[] = [{ text: "verse one", phrase: { firstBar: 2, barCount: 2 } }];
+    const stale = "[Verse]\na text the join would not write\n[Chorus]";
+    const result = apply(project({ lyricLines: lines, lyrics: stale }), { type: "transpose", semitones: 1 });
+    expect(result.lyricLines).toEqual(lines);
+    expect(result.lyrics).toBe(stale);
+  });
+
+  it("closes a phrase over a deleted bar and drops a phrase that loses all its bars", () => {
+    const one = apply(withLines(LINES), { type: "deleteBars", from: 3, count: 1 });
+    expect(one.lyricLines).toEqual([
+      { text: "intro line", phrase: { firstBar: 0, barCount: 1 } },
+      { text: "verse one", phrase: { firstBar: 2, barCount: 1 } },
+      { text: "verse two", phrase: { firstBar: 3, barCount: 2 } },
+      { text: "chorus", phrase: { firstBar: 5, barCount: 2 } },
+    ]);
+
+    const whole = apply(withLines(LINES), { type: "deleteBars", from: 2, count: 2 });
+    expect(whole.lyricLines).toEqual([
+      { text: "intro line", phrase: { firstBar: 0, barCount: 1 } },
+      { text: "verse two", phrase: { firstBar: 2, barCount: 2 } },
+      { text: "chorus", phrase: { firstBar: 4, barCount: 2 } },
+    ]);
+  });
+
+  it("keeps lines through a filled cut and drops the cut bar's line on delete", () => {
+    const cut = parse(CUT_SCORE);
+    const lines: LyricLine[] = [
+      { text: "complete", phrase: { firstBar: 0, barCount: 2 } },
+      { text: "cut", phrase: { firstBar: 2, barCount: 1 } },
+    ];
+    const input = project({ score: CUT_SCORE, lyricLines: lines, lyrics: joinLyrics(cut, lines) });
+
+    const filled = apply(input, { type: "fillTruncatedBar" });
+    expect(filled.lyricLines).toEqual(lines);
+    expect(filled.lyrics).toBe("[A]\ncomplete\n[B]\ncut");
+
+    const deleted = apply(input, { type: "deleteTruncatedBar" });
+    expect(deleted.lyricLines).toEqual([{ text: "complete", phrase: { firstBar: 0, barCount: 2 } }]);
+    expect(deleted.lyrics).toBe("[A]\ncomplete");
+  });
+
+  it("keeps a phrase's whole tick span when a shorter meter expands its bars", () => {
+    const result = apply(withLines(LINES), {
+      type: "setSectionMeter",
+      section: 1,
+      meter: { numerator: 2, denominator: 4 },
+    });
+    const lines = result.lyricLines ?? [];
+    expect(lines[0]).toEqual({ text: "intro line", phrase: { firstBar: 0, barCount: 1 } });
+    expect(lines[1]).toEqual({ text: "verse one", phrase: { firstBar: 2, barCount: 4 } });
+    expect(lines[2]).toEqual({ text: "verse two", phrase: { firstBar: 6, barCount: 4 } });
+    expect(lines[3]).toEqual({ text: "chorus", phrase: { firstBar: 10, barCount: 2 } });
+  });
+
+  it("closes two old bars into one new bar when a longer meter shrinks the section", () => {
+    const before = parse(TWO_FOUR_SCORE);
+    const lines: LyricLine[] = [
+      { text: "compact", phrase: { firstBar: 2, barCount: 2 } },
+      { text: "chorus", phrase: { firstBar: 6, barCount: 2 } },
+    ];
+    const result = apply(project({ score: TWO_FOUR_SCORE, lyricLines: lines, lyrics: joinLyrics(before, lines) }), {
+      type: "setSectionMeter",
+      section: 1,
+      meter: { numerator: 4, denominator: 4 },
+    });
+    expect(result.lyricLines).toEqual([
+      { text: "compact", phrase: { firstBar: 2, barCount: 1 } },
+      { text: "chorus", phrase: { firstBar: 4, barCount: 2 } },
+    ]);
+    expect(result.lyrics).toBe("[Intro]\n[Verse]\ncompact\n[Chorus]\nchorus");
+  });
+});
+
+describe("section commands carry stored lines", () => {
+  it("deletes a section's lines with it", () => {
+    const result = apply(withLines(LINES), { type: "deleteSection", section: 1 });
+    expect(result.lyricLines).toEqual([
+      { text: "intro line", phrase: { firstBar: 0, barCount: 1 } },
+      { text: "chorus", phrase: { firstBar: 2, barCount: 2 } },
+    ]);
+    expect(result.lyrics).toBe("[Intro]\nintro line\n[Chorus]\nchorus");
+  });
+
+  it("copies a section's lines onto the copy's bars", () => {
+    const result = apply(withLines(LINES), { type: "duplicateSection", section: 1 });
+    expect(result.lyricLines).toEqual([
+      { text: "intro line", phrase: { firstBar: 0, barCount: 1 } },
+      { text: "verse one", phrase: { firstBar: 2, barCount: 2 } },
+      { text: "verse two", phrase: { firstBar: 4, barCount: 2 } },
+      { text: "verse one", phrase: { firstBar: 6, barCount: 2 } },
+      { text: "verse two", phrase: { firstBar: 8, barCount: 2 } },
+      { text: "chorus", phrase: { firstBar: 10, barCount: 2 } },
+    ]);
+    expect(result.lyrics).toBe(`[Intro]
+intro line
+[Verse]
+verse one
+verse two
+[Verse]
+verse one
+verse two
+[Chorus]
+chorus`);
+  });
+
+  it("moves a section's lines with it", () => {
+    const result = apply(withLines(LINES), { type: "moveSection", section: 1, direction: "later" });
+    expect(result.lyricLines).toEqual([
+      { text: "intro line", phrase: { firstBar: 0, barCount: 1 } },
+      { text: "chorus", phrase: { firstBar: 2, barCount: 2 } },
+      { text: "verse one", phrase: { firstBar: 4, barCount: 2 } },
+      { text: "verse two", phrase: { firstBar: 6, barCount: 2 } },
+    ]);
+    expect(result.lyrics).toBe(`[Intro]
+intro line
+[Chorus]
+chorus
+[Verse]
+verse one
+verse two`);
+  });
+
+  it("keeps lines wholly on their side of a new section marker", () => {
+    const renamed = apply(withLines(LINES), { type: "renameSection", section: 1, name: "Hook" });
+    expect(renamed.lyricLines).toEqual(LINES);
+    expect(renamed.lyrics).toBe(JOINED.replace("[Verse]", "[Hook]"));
+
+    const split = apply(withLines(LINES), { type: "nameSection", bar: 4, name: "Bridge" });
+    expect(split.lyricLines).toEqual(LINES);
+    expect(split.lyrics).toBe(`[Intro]
+intro line
+[Verse]
+verse one
+[Bridge]
+verse two
+[Chorus]
+chorus`);
+  });
+
+  it("keeps a phrase that spans a new marker in the section of its first bar", () => {
+    const input = withLines([{ text: "long verse", phrase: { firstBar: 2, barCount: 4 } }]);
+    const result = apply(input, { type: "nameSection", bar: 4, name: "Bridge" });
+    expect(result.lyricLines).toEqual([{ text: "long verse", phrase: { firstBar: 2, barCount: 2 } }]);
+    expect(result.lyrics).toBe(`[Intro]
+[Verse]
+long verse
+[Bridge]
+[Chorus]`);
+  });
+});
+
+describe("a project without stored lyric lines", () => {
+  function legacy(score = SCORE, lyrics = LEGACY_LYRICS): SongProject {
+    return project({ score, lyrics });
+  }
+
+  it("deletes a section's old-song lines with it", () => {
+    const result = apply(legacy(), { type: "deleteSection", section: 1 });
+    expect(result.lyricLines).toEqual([
+      { text: "intro line", phrase: { firstBar: 0, barCount: 2 } },
+      { text: "c1", phrase: { firstBar: 2, barCount: 1 } },
+      { text: "c2", phrase: { firstBar: 3, barCount: 1 } },
+    ]);
+    expect(result.lyrics).toBe(`[Intro]
+intro line
+[Chorus]
+c1
+c2`);
+  });
+
+  it("copies a section's old-song lines onto the copy's bars", () => {
+    const result = apply(legacy(), { type: "duplicateSection", section: 1 });
+    expect(result.lyricLines).toEqual([
+      { text: "intro line", phrase: { firstBar: 0, barCount: 2 } },
+      { text: "v1", phrase: { firstBar: 2, barCount: 1 } },
+      { text: "v2", phrase: { firstBar: 3, barCount: 1 } },
+      { text: "v3", phrase: { firstBar: 4, barCount: 1 } },
+      { text: "v4", phrase: { firstBar: 5, barCount: 1 } },
+      { text: "v1", phrase: { firstBar: 6, barCount: 1 } },
+      { text: "v2", phrase: { firstBar: 7, barCount: 1 } },
+      { text: "v3", phrase: { firstBar: 8, barCount: 1 } },
+      { text: "v4", phrase: { firstBar: 9, barCount: 1 } },
+      { text: "c1", phrase: { firstBar: 10, barCount: 1 } },
+      { text: "c2", phrase: { firstBar: 11, barCount: 1 } },
+    ]);
+    expect(result.lyrics).toBe(`[Intro]
+intro line
+[Verse]
+v1
+v2
+v3
+v4
+[Verse]
+v1
+v2
+v3
+v4
+[Chorus]
+c1
+c2`);
+  });
+
+  it("moves a section's old-song lines with it", () => {
+    const result = apply(legacy(), { type: "moveSection", section: 1, direction: "later" });
+    expect(result.lyricLines).toEqual([
+      { text: "intro line", phrase: { firstBar: 0, barCount: 2 } },
+      { text: "c1", phrase: { firstBar: 2, barCount: 1 } },
+      { text: "c2", phrase: { firstBar: 3, barCount: 1 } },
+      { text: "v1", phrase: { firstBar: 4, barCount: 1 } },
+      { text: "v2", phrase: { firstBar: 5, barCount: 1 } },
+      { text: "v3", phrase: { firstBar: 6, barCount: 1 } },
+      { text: "v4", phrase: { firstBar: 7, barCount: 1 } },
+    ]);
+    expect(result.lyrics).toBe(`[Intro]
+intro line
+[Chorus]
+c1
+c2
+[Verse]
+v1
+v2
+v3
+v4`);
+  });
+
+  it("shifts old-song lines after an inserted bar", () => {
+    const result = apply(legacy(), { type: "insertBar", bar: 3 });
+    expect(result.lyricLines).toEqual([
+      { text: "intro line", phrase: { firstBar: 0, barCount: 2 } },
+      { text: "v1", phrase: { firstBar: 2, barCount: 1 } },
+      { text: "v2", phrase: { firstBar: 4, barCount: 1 } },
+      { text: "v3", phrase: { firstBar: 5, barCount: 1 } },
+      { text: "v4", phrase: { firstBar: 6, barCount: 1 } },
+      { text: "c1", phrase: { firstBar: 7, barCount: 1 } },
+      { text: "c2", phrase: { firstBar: 8, barCount: 1 } },
+    ]);
+    expect(result.lyrics).toBe(LEGACY_LYRICS);
+  });
+
+  it("drops an old-song line whose bar is deleted and shifts the rest", () => {
+    const result = apply(legacy(), { type: "deleteBars", from: 3, count: 1 });
+    expect(result.lyricLines).toEqual([
+      { text: "intro line", phrase: { firstBar: 0, barCount: 2 } },
+      { text: "v1", phrase: { firstBar: 2, barCount: 1 } },
+      { text: "v3", phrase: { firstBar: 3, barCount: 1 } },
+      { text: "v4", phrase: { firstBar: 4, barCount: 1 } },
+      { text: "c1", phrase: { firstBar: 5, barCount: 1 } },
+      { text: "c2", phrase: { firstBar: 6, barCount: 1 } },
+    ]);
+    expect(result.lyrics).toBe(`[Intro]
+intro line
+[Verse]
+v1
+v3
+v4
+[Chorus]
+c1
+c2`);
+  });
+
+  it("leaves an old song that stores no lines untouched by a command that changes no line", () => {
+    const input = legacy();
+    const result = apply(input, { type: "transpose", semitones: 1 });
+    expect("lyricLines" in result).toBe(false);
+    expect(result.lyrics).toBe(input.lyrics);
+  });
+
+  it("applies every score command type to a project with no lyric field or lyrics rewrite", () => {
+    const cases: ReadonlyArray<readonly [ScoreCommand, string?]> = [
+      [{ type: "toRest", noteId: "Vocal:0" }],
+      [{ type: "toRests", noteIds: ["Vocal:0"] }],
+      [{ type: "setChord", noteId: "Vocal:0", name: "C" }],
+      [{ type: "insertBar", bar: 3 }],
+      [{ type: "deleteBars", from: 3, count: 1 }],
+      [{ type: "setSectionMeter", section: 1, meter: { numerator: 2, denominator: 4 } }],
+      [{ type: "fillTruncatedBar" }, CUT_SCORE],
+      [{ type: "deleteTruncatedBar" }, CUT_SCORE],
+      [{ type: "transpose", semitones: 1 }],
+      [{ type: "setKey", key: "G" }],
+      [{ type: "setTempo", bpm: 140 }],
+      [{ type: "removeChords" }],
+      [{ type: "deleteSection", section: 1 }],
+      [{ type: "duplicateSection", section: 1 }],
+      [{ type: "moveSection", section: 1, direction: "later" }],
+      [{ type: "renameSection", section: 1, name: "Hook" }],
+      [{ type: "nameSection", bar: 4, name: "Bridge" }],
+    ];
+
+    for (const [command, score] of cases) {
+      const input = project({ score: score ?? SCORE, lyrics: "", style: "120 BPM" });
+      const result = applyProjectCommand(yue2Dialect, input, command);
+      expect(result.diagnostics, command.type).toEqual([]);
+      expect("lyricLines" in result.project, command.type).toBe(false);
+      expect(result.project.lyrics, command.type).toBe("");
+    }
+  });
+});
+
+describe("stored lines on every sample", () => {
+  const directory = new URL("../packages/score-dialect-yue2/tests/", import.meta.url);
+  const facts = JSON.parse(readFileSync(new URL("samples.json", directory), "utf8")) as Array<{ file: string }>;
+
+  function validLines(score: Score, lines: ReadonlyArray<LyricLine>): void {
+    for (const line of alignedLyricLines(lines, score)) {
+      const phrase = line.phrase as LyricLine["phrase"];
+      if (phrase === null) continue;
+      expect(phrase.barCount, line.text).toBeGreaterThan(0);
+      expect(phrase.firstBar, line.text).toBeGreaterThanOrEqual(0);
+      expect(phrase.firstBar + phrase.barCount, line.text).toBeLessThanOrEqual(score.bars.length);
+      const section = score.sections.find(
+        (candidate) =>
+          phrase.firstBar >= candidate.firstBar && phrase.firstBar < candidate.firstBar + candidate.barCount,
+      );
+      expect(section, line.text).toBeDefined();
+      if (section === undefined) continue;
+      expect(phrase.firstBar + phrase.barCount, line.text).toBeLessThanOrEqual(section.firstBar + section.barCount);
+    }
+  }
+
+  it(
+    "keeps every binding inside one new section and rejoins the text after every bar and section command",
+    () => {
+      for (const fact of facts) {
+        const text = readFileSync(new URL(`samples/${fact.file}`, directory), "utf8");
+        const before = parse(text);
+        const lines: LyricLine[] = before.bars.map((bar) => ({
+          text: `bar ${bar.index}`,
+          phrase: { firstBar: bar.index, barCount: 1 },
+        }));
+        const input: SongProject = {
+          ...project(),
+          score: text,
+          lyricLines: lines,
+          lyrics: joinLyrics(before, lines),
+        };
+        const middle = Math.floor(before.bars.length / 2);
+        const commands: ScoreCommand[] = [
+          { type: "insertBar", bar: 0 },
+          { type: "insertBar", bar: middle },
+          { type: "insertBar", bar: before.bars.length },
+          { type: "deleteBars", from: middle, count: 1 },
+          { type: "deleteBars", from: 0, count: Math.min(2, before.bars.length) },
+          { type: "setSectionMeter", section: 0, meter: { numerator: 2, denominator: 4 } },
+          { type: "fillTruncatedBar" },
+          { type: "deleteTruncatedBar" },
+        ];
+        const sectionIndex = Math.max(
+          0,
+          before.sections.findIndex((section) => section.name !== null),
+        );
+        const section = before.sections[sectionIndex];
+        if (section !== undefined) {
+          commands.push({ type: "deleteSection", section: sectionIndex });
+          if (section.name !== null) commands.push({ type: "duplicateSection", section: sectionIndex });
+          if (sectionIndex > 0) commands.push({ type: "moveSection", section: sectionIndex, direction: "earlier" });
+          if (sectionIndex + 1 < before.sections.length) {
+            commands.push({ type: "moveSection", section: sectionIndex, direction: "later" });
+          }
+          commands.push({ type: "renameSection", section: sectionIndex, name: "R" });
+          commands.push({ type: "nameSection", bar: section.firstBar, name: "S" });
+        }
+
+        for (const command of commands) {
+          // applyProjectCommand runs the score command itself; its project is the input unchanged only on a refusal.
+          const result = applyProjectCommand(yue2Dialect, input, command);
+          if (result.project === input) {
+            expect(result.diagnostics.length, `${fact.file} ${command.type}: a refusal says why`).toBeGreaterThan(0);
+            continue;
+          }
+          const after = parse(result.project.score);
+          const resultLines = result.project.lyricLines ?? [];
+          validLines(after, resultLines);
+        }
+      }
+    },
+    SAMPLE_SWEEP_TIMEOUT,
+  );
+});

@@ -1,0 +1,326 @@
+# Public export index
+
+Every public export of the two package entries, grouped by layer. A change that adds one updates this page in the same
+change. The tests in the repository check that the list stays complete.
+
+## Functions
+
+| Export | Package | What it does |
+| --- | --- | --- |
+| `mount` | core | Mounts the default editor on an element; returns `MountedEditor`. |
+| `createScoreFileKeeper` | core | Binds a session to a `ScoreFileSource`: saves explicitly, answers a conflict with overwrite or load, restores the last saved version and saves before a handoff. |
+| `createEditingSession` | core | Builds an `EditingSession` from a project and a `DialectRegistry`. |
+| `mountToolbar` | core | Mounts the toolbar view part: a sideways-scrolling strip of editing and song controls, and an always-visible bar with Save, the view switch and the preview control; takes `ToolbarOptions`. |
+| `mountZoomControl` | core | Mounts the zoom control view part on `(el, session)`. |
+| `mountCutNotice` | core | Mounts the cut-notice view part, with Fill with rests and Delete the incomplete bar on a cut bar. |
+| `mountProblemView` | core | Mounts the problem view part. |
+| `mountTimeRuler` | core | Mounts the time-ruler view part, whose bar numbers choose a run; takes `AxisPartOptions`. |
+| `mountChordTrack` | core | Mounts the chord-track view part; takes `AxisPartOptions`. While the session is editable, a press places, changes or removes a chord through a picker. |
+| `mountVoiceTrack` | core | Mounts one voice track; takes `VoiceTrackOptions` with `voice`. |
+| `mountTextView` | core | Mounts the text view part: the score text in a box, checked as it is typed, handed to the project when it reads. |
+| `mountStaffView` | core | Mounts the staff view part: the score drawn by abcjs, read-only; abcjs is loaded by this call. Returns a `StaffViewPart`. |
+| `mountStaleNotice` | core | Mounts the stale notice part: one sentence while the text view holds text the project did not take. |
+| `mountViewSwitch` | core | Mounts the view switch part: three buttons that set the session's `activeView`. |
+| `mountDraftConflict` | core | Mounts the draft conflict banner: shown while a `DraftKeeper` is in conflict, with one Choose button that opens the two ways out. |
+| `createDialectRegistry` | core | Builds a `DialectRegistry` lookup from an array of dialects. |
+| `applyScoreCommand` | core | Applies one `ScoreCommand` to score text and checks it; returns `ApplyScoreResult` and refuses a `ProjectCommand`. |
+| `applyProjectCommand` | core | Applies one `ScoreCommand` or `ProjectCommand` to a `SongProject`; returns `ApplyProjectResult`. |
+| `applyCommandList` | core | Applies a list of score and project commands as one unit; returns `CommandListResult`, all applied or the untouched project. |
+| `checkProject` | core | Reports the song-project notices of a project as it stands, without changing it. |
+| `lyricLinesOf` | core | The stored lyric lines, or the layout computed from a legacy `lyrics` text. |
+| `layoutLyrics` | core | Lays a legacy `lyrics` text onto a score, spreading each section's lines over its bars by syllable and onset counts, with the unaligned area. |
+| `joinLyrics` | core | Writes the joined `lyrics` text from a score and its lyric lines; unaligned lines are left out. |
+| `alignedLyricLines` | core | The lines bound to a phrase that fits the score; pass the score to leave a stale phrase out. |
+| `unalignedLyricLines` | core | The lines in the unaligned area: no phrase, or one that no longer fits the score. |
+| `lyricSyllables` | core | Splits a lyrics text into the syllable units the count uses. |
+| `syllableCount` | core | Counts syllables: Han and kana one each, Latin by vowel groups, `-` by hand. |
+| `noteOnsets` | core | The `Vocal` notes in a phrase that are not rests or tie continuations. |
+| `alignLyricLine` | core | Compares a line's syllables with its onsets; returns one note per syllable when equal. |
+| `lyricCharacterCount` | core | Counts the characters of a lyrics text as Unicode code points. |
+| `formatDiagnostic` | core | Turns a `Diagnostic` into a sentence in `en` or `zh`. |
+| `meterAllowed` | core | Whether a `Meter` is a positive-integer fraction inside a dialect's `MeterRule`. |
+| `meterChoices` | core | The common meters a dialect's rule allows, for a meter control's radio list. |
+| `COMMON_METERS` | core | The common meter values `meterChoices` filters through a dialect's rule. |
+| `isNoticeDiagnostic` | core | Says whether a diagnostic is a notice, so a changed project is not mistaken for a refusal. |
+| `noteId` | core | Builds a note id from voice and start tick. |
+| `createToolRegistry` | core | Builds a `ToolRegistry` from tools, refusing duplicates and malformed declarations. |
+| `validateToolParameters` | core | Fills defaults and checks a tool's values; returns `ToolParameterCheck`. |
+| `previewTool` | core | Computes a `ToolResult` without a session. |
+| `handleEditingInput` | core | Does what a part does with one `EditingInput` (a key, a click on a note, a click on empty space, a delete, a toggle, a box, select all, invert, clear) to a session; returns `EditingInputResult`. |
+| `mountProjectPanel` | core | Mounts the song project panel: the style text, the score mode, the seed, the joined lyrics with their count and the notices the project carries; takes `EditingPartOptions` and returns a `ProjectPanel`. |
+| `mountSynthPreview` | core | Mounts the synth preview control: a Preview / Stop button and its caption; shown in read-only mode too. |
+| `previewPlayer` | core | The session's one `PreviewPlayer`: start, stop, and the tick under the playhead. |
+| `previewNote` | core | Sounds one MIDI pitch for a short time; resolves whether it sounded. Takes `PreviewNoteOptions`. |
+| `schedulePreview` | core | Turns a `Score` and a start tick into timed note and chord events: a `PreviewSchedule`. Pure. |
+| `tickAtSeconds` | core | The tick at a time from the score's start, following tempo changes and staying at the end past it. Pure. |
+| `createStretchNode` | core | Makes a `StretchNode` in an `AudioContext` or `OfflineAudioContext`: an `AudioWorkletNode` with two output channels that plays 16-bit stems through a time map, which `setSegments` replaces while it plays. Takes `StretchNodeOptions`; resolves once the processor is loaded. |
+| `renderStretch` | core | Renders stems through a time map offline, with the same processor as the node, and returns the two channels as `Float32Array`s. Takes `RenderStretchOptions`. |
+| `int16Stem` | core | Converts one channel of decoded audio to 16-bit samples (scaled by 32768, rounded, clamped), so a 16-bit file comes back exactly. Pure. |
+| `contentHash` | core | The lowercase SHA-256 of the UTF-8 bytes of `JSON.stringify([lyrics, score])`. |
+| `draftText` | core | Writes a `ScoreDraft` as the JSON text a host stores. |
+| `readDraft` | core | Reads a stored text as a `ScoreDraft`; a version 1 text reads with the default multitrack part, and another version or a malformed text is null. |
+| `createDraftKeeper` | core | Binds a session to a `DraftStore`: opens, inherits, debounces writes, resolves conflicts and restores. |
+| `sectionActions` | core | What one section offers a menu: rename, start a section at a bar, move earlier, move later, duplicate and delete, each with its command and, when the command layer would refuse it, the refusal. Asks without changing the session. |
+| `chordSlots` | core | The places a chord can go in a `Score`: the starts of notes and rests in voices the constraints allow chords on, as `ChordSlot`s. Pure. |
+| `nearestChordSlot` | core | The `ChordSlot` nearest a tick, the earlier one on a tie; null when there is none. Pure. |
+| `chordChoices` | core | What a chord picker may offer from a `ChordVocabulary`: letters with their spellings, the types the grammar can write, and whether a bass note is allowed, as `ChordChoices`. Pure. |
+| `splitChordName` | core | Splits a chord name into `ChordNameParts` by a vocabulary; null when the vocabulary does not allow the name. The grammar `setChord` checks. Pure. |
+| `filterNotes` | core | The ids of the notes that satisfy a `NoteFilter` (pitch, time, length, in or out of key, one in every N, invert) in a `Score`. Pure. |
+| `compareBars` | core | The 0-based indices of the bars that differ between two song projects read by one dialect (meter, key, section, notes, chords, and the lyric lines that cover the bar), or the reading diagnostics of the side that does not read. Pure. |
+| `extractFragment` | core | A run of whole bars of a song project as a song project of its own, which the dialect must write and read back; refused when the run reaches the cut or leaves the score. Pure. |
+| `mountToolPanel` | core | Mounts the Tools button and its panel on `(el, session, { tools? })`: lists the built-in note tools and the host's, draws a control per declaration, previews and applies as one history step; takes `ToolPanelOptions`. |
+| `mountFilterPanel` | core | Mounts the Filter button and its panel on `(el, session)`: selects notes by condition through `session.select`; shown in read-only mode too. |
+| `lyricRows` | core | Each lyric line with its place in the list, the phrase it sits on (null in the unaligned area) and its alignment; pass the score so a stale phrase is unaligned. |
+| `lyricBoundaryPlan` | core | The phrases that change and the `setLyricLinePhrase` commands, the line that gives up bars first, when an edge of a phrase is dragged to a tick. |
+| `lyricDropPlan` | core | The one-bar phrase, and its command, for a line let go of over a tick; says whether the bar is free. |
+| `lyricSplitCommand` | core | The `splitLyricLine` command for a caret in a line's text, with the bar when the phrase has two bars or more. |
+| `barLineTick` | core | The tick of a bar line, which is what a `LyricBoundaryPlan`'s `boundary` names; a line before the first bar is the start of the score, one past the last bar its end. |
+| `mountLyricTrack` | core | Mounts the lyric track view part: phrase blocks with their syllable and note-start counts, syllables on their notes, the unaligned area, and while editable the edits of a line; takes `AxisPartOptions` and returns a `LyricTrackPart`. |
+| `changeLog` | core | Reads the original and current projects with a dialect and returns one sentence per kind of change, in the chosen language. |
+| `changeLogEntries` | core | The same sentences as `changeLog`, each with the 1-based `bars` it names (empty when it names none), for a review that highlights the bars the last edit rewrote. |
+| `preHandoffNotices` | core | The five pre-handoff notices a project carries: no sections, syllables far from the notes, Vocal outside 60–82, a melody project with chords, and lines in the unaligned area (their number and the first words of each); each a host `Notice` in the chosen language. The default editor's review shows them first, under a count lead. |
+| `vocalRange` | core | Vocal's tie-chain lower median pitch and whether it is inside the singable range 60–82, as `VocalRange`. |
+| `handoffInstruction` | core | Writes the prefilled handoff instruction: title, the YuE2 request, the fields the score carries, score mode, seed and change log. A blank style or wordless lyrics are left out and one sentence says where to get them. Takes `HandoffInstructionOptions`; `scorePath` names a file instead of the attached `score.abc`. |
+| `mountSourceLabel` | core | Mounts the source label view part: "Generated score (original kept)", "Score file (saves to the file)" or, while read-only, "Score file (read only)", following the session's language, the source read through its getter and `readOnly`; takes `SourceLabelOptions` and returns `SourceLabelPart`. |
+
+## Constants and values
+
+| Export | Package | What it is |
+| --- | --- | --- |
+| `TICKS_PER_QUARTER` | core | 256; the tick unit of the shared model. |
+| `READING_DIAGNOSTIC_CODES` | core | The closed reading diagnostic codes. |
+| `COMMAND_DIAGNOSTIC_CODES` | core | The closed command diagnostic codes. |
+| `NOTICE_DIAGNOSTIC_CODES` | core | The closed notice diagnostic codes (`style-no-bpm`, `melody-with-chords`, `lyrics-unaligned`, `lyrics-too-long`). |
+| `LYRICS_MAX_CHARACTERS` | core | 4000; the editor's own limit on the joined `lyrics` text. |
+| `SINGABLE_RANGE` | core | `{ min: 60, max: 82 }`: the inclusive MIDI range `vocalRange` and the pre-handoff notice share. |
+| `NOTICE_CODES` | core | The closed host message codes: `"command-refused"`, `"draft-source-changed"`, `"draft-save-failed"`, `"score-save-failed"`, `"score-load-failed"`, `"handoff-not-sent"`, `"prehandoff-no-sections"`, `"prehandoff-syllables-far"`, `"prehandoff-vocal-range"`, `"prehandoff-melody-chords"`, `"prehandoff-lyrics-unaligned"`. |
+| `DRAFT_FORMAT_VERSION` | core | 2; the draft format this package writes. Version 1 drafts are still read. |
+| `VIEW_NAMES` | core | `["arrangement", "staff", "text"]`: the views of the default editor, in the order its switch lists them. |
+| `NOTE_TOOLS` | core | The built-in note tools as `ScoreTool`s: split at the insertion point, chop on the grid, join same pitch, legato, reverse, flip, snap to key, length ×2 and ÷2, set length and fit into bars. |
+| `TOOL_GROUPS` | core | The four Tools panel groups: `["note", "quantize", "transform", "generate"]`. |
+| `yue2Id` | YuE2 | `"yue2"`. |
+| `yue2Constraints` | YuE2 | The `DialectConstraints` of the `YuE2` format. |
+| `yue2Dialect` | YuE2 | The `ScoreDialect` for `YuE2`: parse, serialize and check. |
+
+## Mount and session types
+
+| Export | What it is |
+| --- | --- |
+| `MountOptions` | `mount`'s options: project, dialects, language, editable, notify, source, onSaveAs, onUnsavedChange, requiredInputs, drafts, tools, title, handoffScorePath, onHandoff. |
+| `MountedEditor` | `{ update(options), hasUnsavedChanges(), save(), destroy() }`; `save()` returns the score-file keeper's `ScoreFileHandoffResult` (`saved`, `unchanged`, `conflict`, `failed`) and writes nothing for a generated score or read-only/destroyed editor. |
+| `ScoreSource`, `GeneratedScoreSource`, `ScoreFileSource`, `ScoreFileEntry`, `ScoreFileReadFailure`, `ScoreFileSaveResult` | Where the score came from, the host's versioned file save/read, the `{ ok: false, reason: "missing" \| "failed" }` read answer, and the shapes a version uses; see [score-files.md](score-files.md). |
+| `ProjectField`, `RequiredInput` | A project field the host may mark required for a handoff: `"style"`, `"scoreMode"`, `"seed"` or `"lyrics"`. |
+| `Language` | `"zh" \| "en"`. |
+| `Notice`, `NoticeCode` | A one-time host message and its machine-readable reason. |
+| `ChangeLogEntry` | One `changeLogEntries` sentence and the 1-based `bars` it names. |
+| `VocalRange` | `{ medianMidi, singable }`, the register measure `vocalRange` and the pre-handoff notice read. |
+| `SourceLabelOptions`, `SourceLabelPart` | What `mountSourceLabel` reads (`{ source, readOnly?, before?, say? }`) and returns (`refresh()` and `destroy()`); `readOnly` adds "Score file (read only)", and `say` gets the new label once when it changes. |
+| `SessionOptions` | `{ project, dialects, language?, editable?, activeView?, grid? }` for `createEditingSession`. |
+| `EditingSession` | The headless editing session: project, reading, selection, insertion point, bar selection, view, shown view, rejected text, constraints, grid, the last edit's rewritten bars, dispatch, tools, history (its steps, the batch stops and the history commands), subscribe. |
+| `EditOrigin` | `{ author?, batch?, note? }`: who made an edit (`"user"` by default), the agent run's batch it belongs to, and one sentence. The origin argument of `dispatch`, `dispatchAll` and `runTool`. |
+| `HistoryStep` | `{ author, batch?, note }`: one history step as the session records it; `steps` lists them. |
+| `HistoryCommand` | `{ type: "undo" }`, `{ type: "redo" }` or `{ type: "undoBatch", batch, confirm? }`: the commands that move the history through `dispatch`. |
+| `ViewState` | `{ zoom, scrollLeft, language, editable }`, shared by parts and outside the history. |
+| `BarSelection` | A chosen run of bars: `{ from, count }`, `from` base 0. UI state, outside the history. |
+| `InsertionPoint` | `{ tick }` or null. |
+| `ScoreReading` | A readable score, unreadable text with diagnostics, or a model with no dialect. |
+| `DispatchResult` | The project after a command plus its notices when `ok`, or the untouched project and a refusal (with `otherAuthorSteps` when a batch undo asks first). |
+| `SessionChange`, `SessionChangeCause`, `SessionListener` | The notification shape (its flags, its cause, the `ProjectCommand` a dispatch made if any, the `HistoryStep` a change made, undid or redid if any, and the `gridDropped` a project or registry change put back to 1/4), its causes, and the listener type. |
+| `ViewName` | `"arrangement" \| "staff" \| "text"`: which view is shown. |
+| `RejectedText` | `{ text, diagnostics }`: text the text view holds that the session did not take. |
+| `ScoreCommand` | The dialect-agnostic edit union; each command and its refusal codes are listed in the package README. |
+| `VoiceOctaveCommand`, `InstrumentalVersionCommand`, `VoiceCommand` | The two voice edits and their union; members of `ScoreCommand`. Voice octave refuses with `voice-octave-range`; the instrumental version with `unit-unknown`, and adds an Ins voice when the source has none. |
+| `VoiceOctaveReport`, `InstrumentalReport`, `CommandReport` | What a voice command reports: `{ kind: "voiceOctave", octaves, medianMidi, singable }` and `{ kind: "instrumentalVersion", moved, shortened, dropped }`. `ApplyScoreResult.report`, `CommandListResult.reports` and `ToolResult.reports` carry them. |
+| `MoveNotesCommand`, `ResizeNotesCommand`, `MoveResizeCommand` | The note edits, and the union of the two; these are members of `ScoreCommand`. |
+| `AddNoteCommand`, `PasteNotesCommand`, `DuplicateNotesCommand`, `CopyNotesCommand`, `CopiedNote` | The placing commands (a new note, a paste at the insertion point, a repeat after the selection, and the Alt-drag copy) and the copied note they take; members of `ScoreCommand`. |
+| `Grid`, `GridValue` | A time grid and the note values it offers: 4, 8, 16 or 32, with an optional dotted step. The session holds the one in force (`session.grid`, `setGrid`, `allowsGrid`); see [editing-session.md](editing-session.md). |
+| `CommandListResult` | `{ ok, project, diagnostics }` from `applyCommandList`: the applied project, or the untouched one with the refusal. |
+| `ProjectCommand` | The song-project edit union `applyProjectCommand` accepts besides `ScoreCommand` (`setStyle`, `setScoreMode`, `setSeed`, `replaceScoreText`, `setLyricLineText`, `insertLyricLine`, `deleteLyricLine`, `splitLyricLine`, `mergeLyricLines`, `setLyricLinePhrase`, `adoptBars`); each command is listed in the package README. |
+| `BarCompareResult` | The result of `compareBars`: `{ ok: true, bars }` with the 0-based indices, or `{ ok: false, diagnostics }`. |
+| `FragmentRange` | The run `extractFragment` takes: `from`, the 0-based index of its first bar, and `count`, at least 1. |
+| `FragmentResult` | The result of `extractFragment`: `{ ok: true, project, diagnostics }` with the new project and its notices, or `{ ok: false, diagnostics }`. |
+
+## Change log and handoff types
+
+| Export | What it is |
+| --- | --- |
+| `ChangeLogOptions` | `{ language, dialect? }`: the language of the sentences and the dialect that reads both scores. |
+| `HandoffInstructionOptions` | `{ original, current, title?, language, dialect?, scorePath? }` for `handoffInstruction`; a non-blank `scorePath` names that file instead of the attached `score.abc`. |
+| `HandoffPayload` | The attachment (`score.abc`, `text/plain`), the prefilled instruction and the final project handed to the host; the attachment stays when the instruction names a `handoffScorePath`. |
+
+## Score model types
+
+| Export | What it is |
+| --- | --- |
+| `SongProject` | The document: lyrics, style, score text, score mode, seed, model id, source key, and optional `lyricLines`, `multitrack`, `mood`, `ending`, `stoppedBatches`, `handedOutAt` and `changeRecords`. |
+| `Score` | A parsed score: tempo, optional `tempoChanges`, voices, bars, keys, sections, notes, chords, truncation, hasChords, unitTicks, optional `drawingText`, source. |
+| `Bar`, `Meter`, `Tempo`, `KeyChange` | The bar grid, meters, tempo and the key timeline. |
+| `Note`, `Chord`, `Section`, `Truncation` | Notes and rests, chords, sections and a cut score's incomplete tail. |
+| `LyricLine`, `LyricPhrase` | One lyric line with its text and phrase binding, and the run of bars the phrase covers. |
+| `SongEnding` | How the last bar ends: `"back-to-start"` or `"end-here"`. |
+| `ChangeRecord`, `ChangeBatch`, `ProjectSnapshot` | One batch of agent changes the editor has not seen, what an agent says about a batch, and the song project a batch started from. |
+| `changeRecordsOf`, `recordChangeBatch` | Lists a project's change records, oldest first; appends a batch an agent made to a project. |
+| `LyricAlignment`, `LyricSyllableNote` | A line's syllables, onsets and whether their counts are equal, and one syllable placed on its note. |
+
+## Multitrack types
+
+| Export | What it is |
+| --- | --- |
+| `MultitrackPart` | The song project's multitrack part: the `vocal`, `instrumental` and `chords` voices, `scoreTracks`, `audioTracks`, `bindings`, `baseTake` and `timeMap`. |
+| `VoiceSettings` | A voice's timbre name and its `TrackMix`. |
+| `TrackMix` | `{ volumeDb, pan, mute, solo }`: volume in decibels from unity, pan from -1 to 1, and the two switches. |
+| `ScoreTrack` | An added score track: `id`, `name`, `timbre`, `drum`, `notes` and `mix`. |
+| `TrackNote` | `{ start, duration, midi }`: a note in integer ticks, with `midi` from 0 to 127. |
+| `AudioTrack` | A `Placement` with its `mix` and its `candidates`. |
+| `Placement` | One recording of a take on the base timeline: `id`, `take`, `stem`, `anchors`, `removed`, `uncertain` and `suspect`. |
+| `Anchor` | `{ recording, timeline }`, in seconds: a moment in a recording and the timeline moment it lands on. |
+| `Span` | `{ start, end }`, in seconds: a stretch of the base timeline. |
+| `StemName` | `"vocals" \| "drums" \| "bass" \| "other"`; a placement's `stem` is also `null` for the whole recording. |
+| `TimePoint` | `{ score, timeline }`, in seconds: a score time and its base-timeline time. |
+
+## Diagnostics types
+
+| Export | What it is |
+| --- | --- |
+| `Diagnostic` | `{ code, params, at }`; carries no prose. |
+| `DiagnosticAt`, `DiagnosticParams` | Where a diagnostic points and the values its text needs. |
+| `DiagnosticCode` | The union of every reading, command and notice code. |
+| `ReadingDiagnosticCode` | An element of `READING_DIAGNOSTIC_CODES`. |
+| `CommandDiagnosticCode` | An element of `COMMAND_DIAGNOSTIC_CODES`. |
+| `NoticeDiagnosticCode` | An element of `NOTICE_DIAGNOSTIC_CODES`. |
+
+## Dialect types
+
+| Export | What it is |
+| --- | --- |
+| `ScoreDialect` | `{ id, constraints, parse, serialize, check }`. |
+| `DialectRegistry` | `find(modelId)`; built by `createDialectRegistry`, never global. |
+| `ParseResult` | `{ score, diagnostics }`; score is null exactly on an error-level diagnostic. |
+| `DialectConstraints` | The declared voices, keys, tempo, section marker, lyrics, durations, meter and chords. |
+| `ChordVocabulary`, `DurationSet`, `MeterRule` | The chord vocabulary, accepted duration numbers and meter rule types. |
+
+## Apply result types
+
+| Export | What it is |
+| --- | --- |
+| `ApplyScoreResult` | `{ ok: true, text, report? }` or `{ ok: false, diagnostic }`; `report` is the command's `CommandReport` when it has one. |
+| `ApplyProjectResult` | `{ project, diagnostics, reports? }`; the project keeps its old score text on a refusal. |
+
+## View part types
+
+| Export | What it is |
+| --- | --- |
+| `ViewPart` | `{ destroy() }`; safe to destroy twice. |
+| `ProjectPanel` | A `ViewPart` with `element`, `commit()` and `focus(field)`: the song project panel's root, the pending field a host takes when it closes its own container, and the field the handoff opens. |
+| `ProjectPanelOptions` | `{ onRefused?, requiredInputs? }` for `mountProjectPanel`; a required empty field's hint says so. |
+| `StaffViewPart` | `ViewPart` plus `setPlayPosition(seconds \| null)`: the host player's cursor on the staff, cleared with null. The cursor brings itself into the staff's region, never the page, so a host that wants it followed keeps the region in view. |
+| `LyricTrackPart` | `ViewPart` plus `focusEntry()`: opens the lyric track's new-line editor and focuses its text box. |
+| `AxisPartOptions` | `{ scroller?, onRefused? }` for the ruler, chord track and voice tracks. |
+| `VoiceTrackOptions` | `AxisPartOptions` plus `voice`. |
+| `ToolbarOptions` | `{ hintId?, onRefused?, viewSwitch?, synthPreview?, draftKeeper?, tempoKey?, projectPanel?, tools?, onChooseBars? }` for the toolbar. |
+| `ToolbarPart` | `ViewPart` plus `setTools(tools)`: the toolbar's Tools panel follows new host tools (a no-op when the toolbar was mounted without `tools`); and `openProject(field?)`: opens the toolbar's Project panel, on a field when given. |
+| `ToolPanelOptions` | `{ tools?, onRefused? }` for the Tools panel: the host's tools beside the built-in note tools. |
+| `ToolPanelPart` | `ViewPart` plus `setTools(tools)`: replaces the host's tools, keeps the built-ins and the values already set, and closes the panel when the chosen tool is gone. |
+| `EditingInput` | One thing the user did, as data: a key, a click on a note, a click on empty space, a delete, a toggle of one note, a box of notes, select all, invert, or clear. |
+| `EditingInputResult` | `{ handled, refused }`: whether the input meant something, and the diagnostics of an edit the score refused. |
+
+## Tool types
+
+| Export | What it is |
+| --- | --- |
+| `ScoreTool` | `{ id, name, description?, group?, parameters?, commands }`. |
+| `ToolText` | A display name in both interface languages. |
+| `ToolParameter` | One declaration: a `NumberToolParameter`, `BooleanToolParameter`, `ChoiceToolParameter` or `TextToolParameter`. |
+| `NumberToolParameter` | A number with optional `min`, `max` and `step`. |
+| `BooleanToolParameter` | A checkbox. |
+| `ChoiceToolParameter` | A value from a fixed `values` list. |
+| `TextToolParameter` | Free text. |
+| `ToolParameterValue`, `ToolParameterValues` | One value, and values by parameter name. |
+| `ToolCommandBuilder` | `(project, selection, values, context) => ScoreCommand[]`; pure. Every tool is called with a `ToolContext` fourth; a function written with three parameters ignores it. |
+| `ScoreTool.needsSelection`, `ScoreTool.needsGrid` | Optional booleans, both default true; false lets the panel run a whole-song tool with no selection and keeps the generic result check from requiring its unchanged timing on the current grid. |
+| `ToolContext` | `{ grid, insertionPoint, selectionFirstBar, selectionLastBar }`: the grid in force, the insertion point's tick or null, and the selection's 1-based bars or null. |
+| `ToolGroup` | `"note" \| "quantize" \| "transform" \| "generate" \| "more"`; a tool without a group is listed under "more". |
+| `ToolParameterCheck` | The validated values, or the `tool-parameter` diagnostics. |
+| `ToolResult` | `{ ok, project, diagnostics, commands, reports? }` from a preview or a run; `reports` carries what its commands reported. |
+| `ToolRegistry` | `register`, `list` and `find` for the host's tools. |
+
+## Preview types
+
+| Export | What it is |
+| --- | --- |
+| `PreviewPlayer` | `{ playing, tick, from, start(fromTick?), stop(), subscribe(listener) }`. |
+| `PreviewStart` | What `start()` resolves: `"started"`, `"nothing-to-play"`, `"unsupported"`, `"blocked"` or `"cancelled"`. |
+| `PreviewNoteOptions` | `{ duration? }` in seconds for `previewNote`. |
+| `PreviewSchedule` | `{ events, fromTick, secondsPerTick, length }`; `secondsPerTick` is the opening tempo's. |
+| `PreviewEvent` | A `PreviewNoteEvent` or a `PreviewChordEvent`. |
+| `PreviewNoteEvent` | `{ kind: "note", voice, midi, at, length }`. |
+| `PreviewChordEvent` | `{ kind: "chord", name, midis, at, length }`; `midis` is bass first. |
+
+## Time-stretch types
+
+| Export | What it is |
+| --- | --- |
+| `StretchSegment` | `{ output, input, rate, active }` in seconds: from `output` on, the stem plays from `input` at `rate`; `active: false` stops playback there. |
+| `StretchNode` | The `AudioWorkletNode` that `createStretchNode` returns, with `setSegments(segments)`, which replaces the map from the next processing block. |
+| `StretchNodeOptions` | `{ stems, segments, fixedOffsetSeconds? }`: one 16-bit array per channel at the context's rate, the map, and the engine's fixed output delay the node takes off (0.0029 s by default). |
+| `RenderStretchOptions` | `StretchNodeOptions` plus `sampleRate` and `seconds`, for `renderStretch`. |
+
+## Draft types
+
+| Export | What it is |
+| --- | --- |
+| `ScoreDraft` | One saved edit: version, source key, source hash, `DraftProject`, handoff hash and update time. |
+| `DraftProject` | The project fields a draft keeps: style, joined `lyrics`, `lyricLines`, score text, score mode, seed and the multitrack part. |
+| `DraftStore` | The host's storage: `read`, versioned `write`, versioned `remove`, `list`. |
+| `DraftStoreEntry` | `{ text, version }`; the version is opaque and only handed back. |
+| `DraftWriteResult` | `{ ok: true, version }` or `{ ok: false, reason: "conflict" \| "failed" \| "no-access" }`; `no-access` is a score-file host's removed access, and a draft host may report the same thing as `failed`. |
+| `DraftKeeper` | `status`, `ready`, `subscribe`, `overwrite`, `loadTheirs`, `restoreOriginal`, `handoff`, `destroy`. |
+| `DraftKeeperOptions` | `{ session, store, original, notify?, now?, debounceMs? }`. |
+| `DraftKeeperChange` | `{ status }`, announced after a keeper status change. |
+| `DraftKeeperStatus` | `"opening" \| "ready" \| "conflict" \| "destroyed"`. |
+| `DraftHandoffResult` | `"written" \| "unchanged" \| "conflict" \| "failed"`. |
+
+## Score-file types
+
+| Export | What it is |
+| --- | --- |
+| `ScoreFileKeeper` | `status`, `unsaved`, `failed`, `accessLost`, `savedProject`, `version`, `save`, `overwrite`, `loadTheirs`, `restoreOriginal`, `handoff`, `subscribe`, `destroy`. `accessLost` says a save was refused for removed access and no retry is offered. |
+| `ScoreFileKeeperOptions` | `{ session, original, source, notify?, onUnsavedChange? }`. |
+| `ScoreFileKeeperChange` | `{ status, unsaved, failed, accessLost }`, announced after a change. |
+| `ScoreFileKeeperStatus` | `"clean" \| "dirty" \| "saving" \| "conflict" \| "destroyed"`. |
+| `ScoreFileHandoffResult` | `"saved" \| "unchanged" \| "conflict" \| "failed"`. |
+
+## Chord editing types
+
+| Export | What it is |
+| --- | --- |
+| `ChordSlot` | `{ noteId, voice, start, duration, chord, before }`: a start a chord can go on, the chord there (or null) and the chord in force before it (or null). |
+| `ChordChoices` | `{ letters, qualities, slashBass }`: what a picker offers. |
+| `ChordLetter` | `{ letter, roots }`: one letter A-G and the root spellings the vocabulary has on it. |
+| `ChordNameParts` | `{ root, quality, bass }`: a chord name split by a vocabulary; `bass` is null without a slash bass. |
+
+## Filter types
+
+| Export | What it is |
+| --- | --- |
+| `NoteFilter` | The conditions of `filterNotes`, each optional: `pitch`, `time`, `duration`, `key`, `count` and `invert`. |
+
+## Section menu types
+
+| Export | What it is |
+| --- | --- |
+| `SectionAction` | `{ name, command, unavailable }`: one action of a section, the command that does it (`null` for rename and start, which need a name first) and, when the command layer would refuse it, that refusal's `Diagnostic`. |
+| `SectionActionName` | `"rename" \| "start" \| "move-earlier" \| "move-later" \| "duplicate" \| "delete"`, in the order a menu lists them. |
+
+## Lyric track types
+
+| Export | What it is |
+| --- | --- |
+| `LyricRow` | `{ index, line, phrase, alignment }`: one line as the track places it; `phrase` and `alignment` are null in the unaligned area. |
+| `LyricEdge` | `"start" \| "end"`: which edge of a phrase is dragged. |
+| `LyricBoundaryDrag` | `{ line, edge, tick }`: an edge dragged to a tick. |
+| `LyricBoundaryMove` | `{ line, phrase }`: one phrase a drag changes. |
+| `LyricBoundaryPlan` | `{ boundary, moves, commands }`: where the edge lands and what to send, in order. |
+| `LyricDrop` | `{ line, tick }`: a line let go of over a tick. |
+| `LyricDropPlan` | `{ phrase, free, commands }`: the phrase a drop gives, whether its bar is free, and the command. |
+| `LyricSplit` | `{ line, offset }`: a caret, in code points, in a line's text. |

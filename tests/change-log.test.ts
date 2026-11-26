@@ -1,0 +1,387 @@
+// ABOUTME: Seam 1 for the change log: pairs of original and current projects in, readable changes out.
+// ABOUTME: Expected sentences are written by hand in both languages; the dialect is the real YuE2 reader.
+import { readFileSync } from "node:fs";
+import { yue2Dialect } from "@anti_entropy/score-dialect-yue2";
+import { changeLog, changeLogEntries, handoffInstruction, type SongProject } from "@anti_entropy/score-editor";
+import { describe, expect, it } from "vitest";
+
+const HEADER = `X:1
+T:
+M:4/4
+L:1/16
+Q:1/4=120
+V: Vocal clef=treble name="Vocal Melody" snm="Vocal"`;
+
+/** Verse (bars 1-2) and chorus (bars 3-4), one chord on each first bar, one lyric line on each first bar. */
+const SCORE = `${HEADER}
+K:C
+% verse
+V: Vocal
+"C"C4D4E4F4|G16|
+% chorus
+V: Vocal
+A16|B16|`;
+
+/** The same music with one more blank line at the end: the text changed, the reading did not. */
+const SCORE_WITH_TITLE = `${SCORE}\n`;
+
+const LYRICS = "[verse]\nla la\n[chorus]\nha ha";
+
+// The real request lyrics, whose `[Verse]` and `[Chorus]` labels differ from the score's lowercase sections.
+const MORNING_WALK_LYRICS = readFileSync(new URL("fixtures/request-lyrics.txt", import.meta.url), "utf8");
+const MORNING_WALK_SCORE = readFileSync(new URL("fixtures/morning-walk.abc", import.meta.url), "utf8");
+
+const project: SongProject = {
+  style: "pop",
+  lyrics: LYRICS,
+  score: SCORE,
+  scoreMode: "full",
+  seed: 7,
+  modelId: "yue2",
+  sourceKey: "change-log-test",
+};
+
+const changed = (patch: Partial<SongProject> = {}): SongProject => ({ ...project, ...patch });
+
+const log = (current: SongProject, language: "en" | "zh" = "en") =>
+  changeLog(project, current, { language, dialect: yue2Dialect });
+
+/** The intro is the third line of every instruction: the title, a blank line, then the request. */
+const introOf = (text: string): string => text.split("\n")[2] ?? "";
+
+const INTRO = {
+  en: "Regenerate with YuE2. Use the score in the attached score.abc.",
+  zh: "用 YuE2 重新生成，乐谱用附件里的 score.abc。",
+} as const;
+
+describe("the structured change log", () => {
+  it("keeps the sentences and names the bars a note entry reports", () => {
+    const current = changed({ score: SCORE.replace("C4D4E4F4", "C4E4E4F4") });
+    const options = { language: "en" as const, dialect: yue2Dialect };
+    const entries = changeLogEntries(project, current, options);
+    expect(entries.map((entry) => entry.text)).toEqual(changeLog(project, current, options));
+    expect(entries.find((entry) => entry.text.startsWith("The notes of"))?.bars).toEqual([1]);
+  });
+});
+
+describe("the change log", () => {
+  it("names a score text edit that leaves the parsed score as it was", () => {
+    expect(log(changed({ score: SCORE_WITH_TITLE }))).toEqual(["Edited the score text directly."]);
+    expect(log(changed({ score: SCORE_WITH_TITLE }), "zh")).toEqual(["直接修改了乐谱文本。"]);
+  });
+
+  it("says the lyrics changed for a draft saved on the old one-bar layout", () => {
+    const oldDraft = changed({
+      lyricLines: [
+        { text: "la la", phrase: { firstBar: 0, barCount: 1 } },
+        { text: "ha ha", phrase: { firstBar: 2, barCount: 1 } },
+      ],
+    });
+    expect(log(oldDraft)).toEqual(["Lyrics changed."]);
+    expect(log(oldDraft, "zh")).toEqual(["歌词有改动。"]);
+  });
+});
+
+describe("section changes, read from the two scores", () => {
+  const musicOnly: SongProject = { ...project, lyrics: "" };
+  const musicLog = (score: string, language: "en" | "zh" = "en") =>
+    changeLog(musicOnly, { ...musicOnly, score }, { language, dialect: yue2Dialect });
+
+  it("names a deleted section without calling its notes a note change", () => {
+    const withoutChorus = `${HEADER}
+K:C
+% verse
+V: Vocal
+"C"C4D4E4F4|G16|`;
+    expect(musicLog(withoutChorus)).toEqual(["Removed section “chorus”."]);
+    expect(musicLog(withoutChorus, "zh")).toEqual(["删除了段落「chorus」。"]);
+  });
+
+  it("names a copied section", () => {
+    const twice = `${SCORE}
+% chorus
+V: Vocal
+A16|B16|`;
+    expect(musicLog(twice)).toEqual(["Copied section “chorus”."]);
+    expect(musicLog(twice, "zh")).toEqual(["复制了段落「chorus」。"]);
+  });
+
+  it("names the section that moved, not the ones whose bar numbers shifted", () => {
+    const moved = `${HEADER}
+K:C
+% chorus
+V: Vocal
+A16|B16|
+% verse
+V: Vocal
+"C"C4D4E4F4|G16|`;
+    expect(musicLog(moved)).toEqual(["Moved section “verse”."]);
+    expect(musicLog(moved, "zh")).toEqual(["移动了段落「verse」。"]);
+  });
+
+  it("names a renamed section", () => {
+    const renamed = SCORE.replace("% chorus", "% outro");
+    expect(musicLog(renamed)).toEqual(["Renamed section “chorus” to “outro”."]);
+  });
+
+  it("names the same changes in Chinese", () => {
+    const renamed = SCORE.replace("% chorus", "% outro");
+    expect(musicLog(renamed, "zh")).toEqual(["段落「chorus」改名为「outro」。"]);
+  });
+});
+
+describe("the other kinds of change", () => {
+  it("names the tempo, key, meter, chords, lyrics, style, score mode and seed", () => {
+    const changedScore = `${HEADER.replace("Q:1/4=120", "Q:1/4=140").replace("M:4/4", "M:2/2")}
+K:Am
+% verse
+V: Vocal
+"Am"C4D4E4F4|G16|
+% chorus
+V: Vocal
+A16|B16|`;
+    const current = changed({
+      score: changedScore,
+      style: "rock",
+      lyrics: "[verse]\nnew words\n[chorus]\nha ha",
+      scoreMode: "melody",
+      seed: 9,
+    });
+    expect(log(current)).toEqual([
+      "Tempo changed from 120 to 140 BPM.",
+      "Key changed from C to Am.",
+      "Meter changed to 2/2 in bars 1–4.",
+      "Chords changed.",
+      "Lyrics changed.",
+      "Style description changed.",
+      "Score mode changed from Full to Melody.",
+      "Seed changed from 7 to 9.",
+    ]);
+  });
+
+  it("names the bars whose notes changed, and not a section move's shifted bars", () => {
+    const noteChanged = SCORE.replace("C4D4E4F4", "C4E4E4F4");
+    expect(log(changed({ score: noteChanged }))).toEqual(["The notes of bar 1 changed."]);
+    expect(log(changed({ score: noteChanged }), "zh")).toEqual(["第 1 小节的音符有改动。"]);
+  });
+
+  it("names changed bars as one bar, a range or a list", () => {
+    const twoBars = SCORE.replace("C4D4E4F4", "C4E4E4F4").replace("A16|B16|", "C16|B16|");
+    expect(log(changed({ score: twoBars }))).toEqual(["The notes of bars 1, 3 changed."]);
+    expect(log(changed({ score: twoBars }), "zh")).toEqual(["第 1、3 小节的音符有改动。"]);
+  });
+
+  it("names a removed seed in Chinese", () => {
+    expect(log(changed({ seed: null }), "zh")).toEqual(["种子从 7 改为 无。"]);
+  });
+});
+
+describe("the prefilled handoff instruction", () => {
+  const noteChanged = SCORE.replace("C4D4E4F4", "C4E4E4F4");
+  const current = changed({
+    score: noteChanged,
+    style: "rock",
+    lyrics: "[verse]\nnew words\n[chorus]\nha ha",
+    scoreMode: "melody",
+    seed: 9,
+  });
+
+  const blankBoth = {
+    en: "This score carries no style description and no lyrics: take them from the person's message or this conversation; if neither has them, ask the person before generating.",
+    zh: "这份乐谱没有风格描述和歌词：从用户的消息或这段对话里取，都没有就先问用户，再生成。",
+  } as const;
+  const blankStyle = {
+    en: "This score carries no style description: take it from the person's message or this conversation; if neither has it, ask the person before generating.",
+    zh: "这份乐谱没有风格描述：从用户的消息或这段对话里取，都没有就先问用户，再生成。",
+  } as const;
+  const blankLyrics = {
+    en: "This score carries no lyrics: take them from the person's message or this conversation; if neither has them, ask the person before generating.",
+    zh: "这份乐谱没有歌词：从用户的消息或这段对话里取，都没有就先问用户，再生成。",
+  } as const;
+  const finalStyle = {
+    en: "The style description below is final and already synced by the editor; do not change it.",
+    zh: "下面的风格描述是最终版，编辑器已经同步好，不要再改。",
+  } as const;
+  const finalLyrics = {
+    en: "The joined lyrics below are final and already synced by the editor; do not change them.",
+    zh: "下面拼回的歌词是最终版，编辑器已经同步好，不要再改。",
+  } as const;
+  const absentStyle = { en: "Style description:", zh: "风格描述:" } as const;
+  const absentLyrics = { en: "Joined lyrics:", zh: "拼回的歌词:" } as const;
+
+  it("does not call a blank style or wordless lyrics final", () => {
+    for (const language of ["en", "zh"] as const) {
+      const text = handoffInstruction({
+        original: project,
+        current: changed({ style: "  ", lyrics: "[verse]\n\n[chorus]\n" }),
+        title: "My Song",
+        language,
+        dialect: yue2Dialect,
+      });
+      expect(text).toContain(blankBoth[language]);
+      expect(text).not.toContain(absentStyle[language]);
+      expect(text).not.toContain(absentLyrics[language]);
+      expect(text).not.toContain(
+        language === "en"
+          ? "The style description and joined lyrics below are final"
+          : "下面的风格描述和拼回的歌词是最终版",
+      );
+    }
+  });
+
+  it("calls only the field with content final, and names the blank style", () => {
+    for (const language of ["en", "zh"] as const) {
+      const text = handoffInstruction({
+        original: project,
+        current: changed({ style: "   ", lyrics: "[verse]\nla\n[chorus]\nha" }),
+        title: "My Song",
+        language,
+        dialect: yue2Dialect,
+      });
+      expect(text).toContain(blankStyle[language]);
+      expect(text).toContain(finalLyrics[language]);
+      expect(text).not.toContain(absentStyle[language]);
+      expect(text).toContain(`${absentLyrics[language]}\n[verse]\nla\n[chorus]\nha`);
+    }
+  });
+
+  it("leaves out section labels with no words and names the missing lyrics", () => {
+    for (const language of ["en", "zh"] as const) {
+      const text = handoffInstruction({
+        original: project,
+        current: changed({ style: "rock", lyrics: "[verse]\n\n[chorus]\n" }),
+        title: "My Song",
+        language,
+        dialect: yue2Dialect,
+      });
+      expect(text).toContain(blankLyrics[language]);
+      expect(text).toContain(finalStyle[language]);
+      expect(text).toContain(`${absentStyle[language]}\nrock`);
+      expect(text).not.toContain(absentLyrics[language]);
+    }
+  });
+
+  it("keeps the text of a project with both fields exactly as before", () => {
+    const expected = {
+      en: `Title: My Song\n\n${INTRO.en}\n\nThe style description and joined lyrics below are final and already synced by the editor; do not change them.\nStyle description:\npop\nJoined lyrics:\n[verse]\nla la\n[chorus]\nha ha\n\nScore mode: full\nSeed: 7\n\nChanges:\nNo changes from the original.\n`,
+      zh: `标题: 我的歌\n\n${INTRO.zh}\n\n下面的风格描述和拼回的歌词是最终版，编辑器已经同步好，不要再改。\n风格描述:\npop\n拼回的歌词:\n[verse]\nla la\n[chorus]\nha ha\n\n乐谱模式: full\nSeed: 7\n\n改动记录:\n和原版相比没有改动。\n`,
+    } as const;
+    for (const language of ["en", "zh"] as const) {
+      const text = handoffInstruction({
+        original: project,
+        current: project,
+        title: language === "en" ? "My Song" : "我的歌",
+        language,
+        dialect: yue2Dialect,
+      });
+      expect(text).toBe(expected[language]);
+    }
+  });
+
+  it("states the title, the request to regenerate with YuE2, the final fields and the change log", () => {
+    const text = handoffInstruction({
+      original: project,
+      current,
+      title: "My Song",
+      language: "en",
+      dialect: yue2Dialect,
+    });
+    expect(text).toContain("Title: My Song");
+    expect(text).toContain(INTRO.en);
+    expect(text).toContain("score.abc");
+    expect(text).toContain("Style description:\nrock");
+    expect(text).toContain("Joined lyrics:\n[verse]\nnew words\n[chorus]\nha ha");
+    expect(text).toContain("Score mode: melody");
+    expect(text).toContain("Seed: 9");
+    expect(text).toContain("Changes:");
+    expect(text).toContain("- The notes of bar 1 changed.");
+  });
+
+  it("carries every requested line into the instruction for the real generation", () => {
+    const morningWalk = changed({
+      score: MORNING_WALK_SCORE,
+      lyrics: MORNING_WALK_LYRICS,
+      sourceKey: "morning-walk",
+    });
+    const text = handoffInstruction({
+      original: morningWalk,
+      current: morningWalk,
+      title: "Morning Walk",
+      language: "en",
+      dialect: yue2Dialect,
+    });
+    const joined = text.split("Joined lyrics:\n")[1]?.split("\n\nScore mode:")[0];
+    expect(joined).toBe(`[intro]
+[verse]
+Morning light on the station
+I wait for the first train
+Coffee steam and a quiet song
+Carry me along
+[chorus]
+Run with me, run with me
+Into the open sky
+Run with me, run with me
+We will learn to fly
+[outro]`);
+    expect(joined).toContain("Run with me, run with me");
+  });
+
+  it("writes the same instruction in Chinese, without a seed line when there is none", () => {
+    const text = handoffInstruction({
+      original: project,
+      current: { ...current, seed: null },
+      title: "我的歌",
+      language: "zh",
+      dialect: yue2Dialect,
+    });
+    expect(text).toContain("标题: 我的歌");
+    expect(text).toContain(INTRO.zh);
+    expect(text).toContain("score.abc");
+    expect(text).toContain("风格描述:\nrock");
+    expect(text).toContain("拼回的歌词:\n[verse]\nnew words\n[chorus]\nha ha");
+    expect(text).toContain("乐谱模式: melody");
+    expect(text).not.toContain("Seed:");
+    expect(text).toContain("改动记录:");
+    expect(text).toContain("- 第 1 小节的音符有改动。");
+    expect(text).toContain("- 乐谱模式从 完整 改为 旋律。");
+    expect(text).toContain("- 种子从 7 改为 无。");
+  });
+
+  it("uses the source key as the title when none is given", () => {
+    const text = handoffInstruction({ original: project, current, language: "en", dialect: yue2Dialect });
+    expect(text).toContain("Title: change-log-test");
+  });
+
+  it("names the score's file instead of the attachment when scorePath is given", () => {
+    const path = "songs/My Song.abc";
+    for (const language of ["en", "zh"] as const) {
+      const text = handoffInstruction({
+        original: project,
+        current,
+        title: "My Song",
+        language,
+        dialect: yue2Dialect,
+        scorePath: path,
+      });
+      expect(introOf(text)).toBe(
+        language === "en"
+          ? `Regenerate with YuE2. Use the score in the file \`${path}\`.`
+          : `用 YuE2 重新生成，乐谱用文件 \`${path}\`。`,
+      );
+      expect(text).not.toContain("attached");
+      expect(text).not.toContain("附件");
+      expect(text).not.toContain("score.abc");
+    }
+  });
+
+  it("keeps the attached-score intro when scorePath is absent or blank", () => {
+    for (const language of ["en", "zh"] as const) {
+      const base = { original: project, current, title: "My Song", language, dialect: yue2Dialect };
+      const absent = handoffInstruction(base);
+      const blank = handoffInstruction({ ...base, scorePath: "   " });
+      expect(introOf(absent)).toBe(INTRO[language]);
+      expect(introOf(blank)).toBe(INTRO[language]);
+      expect(blank).toBe(absent);
+    }
+  });
+});
