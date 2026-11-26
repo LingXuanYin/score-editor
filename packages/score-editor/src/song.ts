@@ -78,6 +78,8 @@ export interface SongTrack {
   readonly placements: ReadonlyArray<ClipPlacement>;
   /** Pitch bend curve, values -8192 to 8191. */
   readonly pitchBend: ReadonlyArray<CurvePoint>;
+  /** The pitch bend range in semitones; absent means 2. */
+  readonly bendRange?: number;
   readonly controls: ReadonlyArray<ControlCurve>;
 }
 

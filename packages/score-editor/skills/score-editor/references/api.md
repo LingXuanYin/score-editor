@@ -196,7 +196,7 @@ change. The tests in the repository check that the list stays complete.
 | `Song` | The song model: style, lyric lines, score mode, seed, `time`, `notationUnit`, `tracks`, `chords`, `clips`, `guideTrack`, `audioTracks`, `bindings` and `nextId`. See [song.md](song.md). |
 | `TimeGrid` | The bar grid of a song: tempo and its changes, meter and its changes by bar index, the key timeline, `barCount` and `sections`. |
 | `SongBar` | One bar of a time grid: `index`, `start`, `length` and `meter`, in song ticks. |
-| `SongTrack` | A track of notes: `id`, `name`, `role`, `program`, `timbre`, `mix`, `notes`, `placements`, `pitchBend` and `controls`. |
+| `SongTrack` | A track of notes: `id`, `name`, `role`, `program`, `timbre`, `mix`, `notes`, `placements`, `pitchBend`, `controls` and the optional `bendRange`, the pitch bend range in semitones (2 when absent). |
 | `TrackRole` | `"vocal" \| "instrument" \| "drums"`. |
 | `SongNote` | One note: `id`, `pitch`, `start`, `duration` and `velocity`, with optional `probability` and `muted`. |
 | `Clip` | A reusable run of notes for one kind of instrument, with its `length`. |

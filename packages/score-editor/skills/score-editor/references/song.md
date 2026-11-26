@@ -20,7 +20,7 @@ const version3Text = draft === null ? null : songDraftText(draft); // what the h
 
 ## The model
 
-A `Song` holds `style`, `lyricLines`, `scoreMode`, `seed`, the `time` grid (a `TimeGrid`), `notationUnit`, `tracks`, `chords`, `clips`, `guideTrack`, `audioTracks`, `bindings` and `nextId`. Each of `tracks` is a `SongTrack` with its `SongNote`s, its `ClipPlacement`s of `Clip`s, its `CurvePoint` pitch bend and its `ControlCurve`s, and a `TrackRole` of `vocal`, `instrument` or `drums`. The chord track holds `SongChord`s in a `ChordTrack`. `songBars(time)` lists the bars of a grid as `SongBar`s.
+A `Song` holds `style`, `lyricLines`, `scoreMode`, `seed`, the `time` grid (a `TimeGrid`), `notationUnit`, `tracks`, `chords`, `clips`, `guideTrack`, `audioTracks`, `bindings` and `nextId`. Each of `tracks` is a `SongTrack` with its `SongNote`s, its `ClipPlacement`s of `Clip`s, its `CurvePoint` pitch bend, an optional `bendRange` in semitones (2 when absent) and its `ControlCurve`s, and a `TrackRole` of `vocal`, `instrument` or `drums`. The chord track holds `SongChord`s in a `ChordTrack`. `songBars(time)` lists the bars of a grid as `SongBar`s.
 
 - Every position and length is in song ticks: `SONG_PPQ` (3840) to the quarter note. A score counts 256 to the quarter, and `SONG_TICKS_PER_SCORE_TICK` (15) is the factor between the two.
 - An id is a letter and a number. A song takes its numbers from `nextId`, from 1 upward, and `nextId` goes up by one with each id taken. Notes start with `n` and chords with `c`, so the same import gives the same ids.

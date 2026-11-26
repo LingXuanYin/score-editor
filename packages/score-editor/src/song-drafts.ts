@@ -56,6 +56,7 @@ const songTrack = v.object({
   notes: v.array(songNote),
   placements: v.array(clipPlacement),
   pitchBend: v.array(curvePoint),
+  bendRange: v.exactOptional(v.number()),
   controls: v.array(v.object({ controller: int, points: v.array(curvePoint) })),
 });
 const clip = v.object({ id: str, name: str, role, program: int, length: int, notes: v.array(songNote) });
