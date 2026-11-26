@@ -241,3 +241,30 @@ export type { SongEnding } from "./score";
 // Time stretch: the stems and the time map of a track, live and offline.
 export type { RenderStretchOptions, StretchNode, StretchNodeOptions, StretchSegment } from "./stretch";
 export { createStretchNode, int16Stem, renderStretch } from "./stretch";
+// The song model, its import from a score, and the song draft.
+export type {
+  ChordTrack,
+  Clip,
+  ClipPlacement,
+  ControlCurve,
+  CurvePoint,
+  Song,
+  SongBar,
+  SongChord,
+  SongNote,
+  SongTrack,
+  TimeGrid,
+  TrackRole,
+} from "./song";
+export {
+  DEFAULT_NOTATION_UNIT,
+  DEFAULT_VELOCITY,
+  INSTRUMENTAL_TRACK_ID,
+  SONG_PPQ,
+  SONG_TICKS_PER_SCORE_TICK,
+  songBars,
+  VOCAL_TRACK_ID,
+} from "./song";
+export { songFromScore } from "./song-import";
+export type { SongDraft } from "./song-drafts";
+export { readSongDraft, SONG_DRAFT_VERSION, songDraftText } from "./song-drafts";

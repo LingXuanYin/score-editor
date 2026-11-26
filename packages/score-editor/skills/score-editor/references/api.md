@@ -82,12 +82,23 @@ change. The tests in the repository check that the list stays complete.
 | `vocalRange` | core | Vocal's tie-chain lower median pitch and whether it is inside the singable range 60–82, as `VocalRange`. |
 | `handoffInstruction` | core | Writes the prefilled handoff instruction: title, the YuE2 request, the fields the score carries, score mode, seed and change log. A blank style or wordless lyrics are left out and one sentence says where to get them. Takes `HandoffInstructionOptions`; `scorePath` names a file instead of the attached `score.abc`. |
 | `mountSourceLabel` | core | Mounts the source label view part: "Generated score (original kept)", "Score file (saves to the file)" or, while read-only, "Score file (read only)", following the session's language, the source read through its getter and `readOnly`; takes `SourceLabelOptions` and returns `SourceLabelPart`. |
+| `songFromScore` | core | Imports a `Score` a dialect read as a `Song`: the voices as tracks, the chords as the chord track, the bars as the time grid. See [song.md](song.md). |
+| `songBars` | core | The bars of a `TimeGrid` in order, each a `SongBar` with its start and length in song ticks. |
+| `songDraftText` | core | The JSON text of a `SongDraft`, the version 3 draft a host stores. |
+| `readSongDraft` | core | Reads a stored text as a `SongDraft`: version 3 checked against the song model, version 1 or 2 parsed by the given dialect and imported; any other text, or a version 3 with the wrong shape, is `null`. |
 
 ## Constants and values
 
 | Export | Package | What it is |
 | --- | --- | --- |
 | `TICKS_PER_QUARTER` | core | 256; the tick unit of the shared model. |
+| `SONG_PPQ` | core | 3840; the song ticks to the quarter note. See [song.md](song.md). |
+| `SONG_TICKS_PER_SCORE_TICK` | core | 15; song ticks in one score tick. |
+| `DEFAULT_VELOCITY` | core | 100; the velocity of a note that came from a score text. |
+| `DEFAULT_NOTATION_UNIT` | core | 960; a sixteenth note in song ticks, the notation grid of a score that states no unit. |
+| `VOCAL_TRACK_ID` | core | `"vocal"`; the id of the track a score's `Vocal` voice becomes. |
+| `INSTRUMENTAL_TRACK_ID` | core | `"ins"`; the id of the track a score's `Ins` voice becomes. |
+| `SONG_DRAFT_VERSION` | core | 3; the song draft format `songDraftText` writes. Versions 1 and 2 are read, not written. |
 | `READING_DIAGNOSTIC_CODES` | core | The closed reading diagnostic codes. |
 | `COMMAND_DIAGNOSTIC_CODES` | core | The closed command diagnostic codes. |
 | `NOTICE_DIAGNOSTIC_CODES` | core | The closed notice diagnostic codes (`style-no-bpm`, `melody-with-chords`, `lyrics-unaligned`, `lyrics-too-long`). |
@@ -177,6 +188,24 @@ change. The tests in the repository check that the list stays complete.
 | `Span` | `{ start, end }`, in seconds: a stretch of the base timeline. |
 | `StemName` | `"vocals" \| "drums" \| "bass" \| "other"`; a placement's `stem` is also `null` for the whole recording. |
 | `TimePoint` | `{ score, timeline }`, in seconds: a score time and its base-timeline time. |
+
+## Song types
+
+| Export | What it is |
+| --- | --- |
+| `Song` | The song model: style, lyric lines, score mode, seed, `time`, `notationUnit`, `tracks`, `chords`, `clips`, `guideTrack`, `audioTracks`, `bindings` and `nextId`. See [song.md](song.md). |
+| `TimeGrid` | The bar grid of a song: tempo and its changes, meter and its changes by bar index, the key timeline, `barCount` and `sections`. |
+| `SongBar` | One bar of a time grid: `index`, `start`, `length` and `meter`, in song ticks. |
+| `SongTrack` | A track of notes: `id`, `name`, `role`, `program`, `timbre`, `mix`, `notes`, `placements`, `pitchBend`, `controls` and the optional `bendRange`, the pitch bend range in semitones (2 when absent). |
+| `TrackRole` | `"vocal" \| "instrument" \| "drums"`. |
+| `SongNote` | One note: `id`, `pitch`, `start`, `duration` and `velocity`, with optional `probability` and `muted`. |
+| `Clip` | A reusable run of notes for one kind of instrument, with its `length`. |
+| `ClipPlacement` | A clip laid on a track: its `start`, `loops`, and the `trimStart` and `trimEnd` cut from it. |
+| `CurvePoint` | `{ at, value }`: a point of a pitch bend or control curve; the value holds until the next point. |
+| `ControlCurve` | One MIDI controller's `CurvePoint`s. |
+| `SongChord` | A chord symbol: `id`, `start` and `name`. |
+| `ChordTrack` | The chord track: `program`, `timbre`, `mix` and its `chords`. |
+| `SongDraft` | A version 3 draft: `version`, `sourceKey`, `sourceHash`, `updatedAt` and `song`. |
 
 ## Diagnostics types
 

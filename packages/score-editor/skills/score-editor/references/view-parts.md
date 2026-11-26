@@ -55,7 +55,7 @@ project keeps the last score that read. The views that draw the project then sho
 above them says so. A read-only session gives a read-only box.
 
 The staff view draws the score with abcjs, which the part loads with a dynamic `import()` when it is
-mounted: importing the package loads none of it, and `abcjs` is the package's one runtime dependency. The dialect may
+mounted: importing the package loads none of abcjs. The package's other runtime dependency, `valibot`, is imported statically by the entry (it checks stored song drafts and has no side effects), so a host that maps bare specifiers with an import map must map `valibot` as well as `abcjs`. The dialect may
 give the score a `drawingText`; the staff reads that when it is there, and `YuE2` uses it to draw each `Z2`–`Z4` run as
 separate one-bar rests while the project text keeps the run. Until abcjs
 arrives the part says it is loading; if it cannot be loaded the part says so and the other parts go on working. The

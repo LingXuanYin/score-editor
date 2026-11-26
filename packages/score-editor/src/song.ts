@@ -12,8 +12,9 @@ import {
 } from "./score";
 
 /**
- * Song ticks per quarter note. 3840 holds the score model's 1/1024 note, triplets and the positions of 96 to 960 PPQ
- * MIDI files exactly. Every position and length in a `Song` is in these ticks.
+ * Song ticks per quarter note. A 1/1024 note is 15 of them, and a triplet or a quintuplet lands on whole ticks.
+ * So do the positions of MIDI files at 96, 120, 192, 240, 384, 480 and 960 PPQ, which divide 3840 evenly.
+ * Every position and length in a `Song` is in these ticks.
  */
 export const SONG_PPQ = 3840;
 
@@ -78,6 +79,8 @@ export interface SongTrack {
   readonly placements: ReadonlyArray<ClipPlacement>;
   /** Pitch bend curve, values -8192 to 8191. */
   readonly pitchBend: ReadonlyArray<CurvePoint>;
+  /** The pitch bend range in semitones; absent means 2. */
+  readonly bendRange?: number;
   readonly controls: ReadonlyArray<ControlCurve>;
 }
 
@@ -109,7 +112,10 @@ export interface ClipPlacement {
   readonly trimEnd: number;
 }
 
-/** A chord symbol on the chord track. It holds until the next one. */
+/**
+ * A chord symbol on the chord track. It holds until the next one. When a bar has no chord of its own and other tracks
+ * sound, a projection may infer one for it.
+ */
 export interface SongChord {
   readonly id: string;
   readonly start: number;

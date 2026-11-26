@@ -25,28 +25,34 @@ const served = [
 ];
 
 /**
- * abcjs is a CommonJS package, so a page with no bundler cannot import it. This is the bundler of the bare host: the page maps
- * the specifier "abcjs" to this one file, built once from the package the editor depends on.
+ * Bundles built once each. abcjs is a CommonJS package and valibot is imported by its bare name, so a page with no bundler
+ * cannot load either: the test page's import map names the two vendor files. The core bundle is the built editor with
+ * everything it imports inside, for the skill examples, whose pages load the core from esm.sh and have no import map.
  */
-const abcjsRoute = "/e2e/page/vendor/abcjs.js";
-let abcjsModule;
-function buildAbcjs() {
-  abcjsModule ??= build({
-    stdin: { contents: `export { default } from "abcjs";`, resolveDir: join(root, "packages/score-editor") },
+const sourceDir = join(root, "packages/score-editor");
+const bundles = {
+  "/e2e/page/vendor/abcjs.js": { stdin: { contents: `export { default } from "abcjs";`, resolveDir: sourceDir } },
+  "/e2e/page/vendor/valibot.js": { stdin: { contents: `export * from "valibot";`, resolveDir: sourceDir } },
+  "/e2e/page/vendor/score-editor.js": { entryPoints: [join(sourceDir, "dist/index.js")] },
+};
+const bundled = {};
+function buildBundle(route) {
+  bundled[route] ??= build({
+    ...bundles[route],
     bundle: true,
     format: "esm",
     platform: "browser",
     write: false,
     logLevel: "silent",
   }).then((result) => result.outputFiles[0].text);
-  return abcjsModule;
+  return bundled[route];
 }
 
 const server = createServer(async (req, res) => {
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
-  if (path === abcjsRoute) {
+  if (Object.hasOwn(bundles, path)) {
     res.writeHead(200, { "content-type": types[".js"], "cache-control": "no-store" });
-    res.end(await buildAbcjs());
+    res.end(await buildBundle(path));
     return;
   }
   const target = path === "/" ? "/e2e/page/index.html" : path;
@@ -68,5 +74,5 @@ const server = createServer(async (req, res) => {
 });
 
 // Built before the server listens, so the first test that draws a staff does not wait for the bundler.
-await buildAbcjs();
+await Promise.all(Object.keys(bundles).map(buildBundle));
 server.listen(port, "127.0.0.1");
