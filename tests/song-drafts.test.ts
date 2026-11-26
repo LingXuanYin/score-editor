@@ -1,11 +1,20 @@
 // ABOUTME: Reads song drafts through the package entries: a version 3 text reads back as written, and a malformed one is no draft.
-// ABOUTME: A version 2 draft, written out by hand, reads as the notes of its score with its timbres, mixes and score tracks.
+// ABOUTME: A version 1 or 2 draft reads as the notes of its score, with its timbres, mixes, score tracks and audio tracks.
 import { yue2Dialect } from "@anti_entropy/score-dialect-yue2";
-import { readSongDraft, type Song, type SongDraft, songDraftText } from "@anti_entropy/score-editor";
+import {
+  readSongDraft,
+  type Song,
+  type SongChord,
+  type SongDraft,
+  type SongNote,
+  songDraftText,
+  type TimeGrid,
+} from "@anti_entropy/score-editor";
 import { describe, expect, it } from "vitest";
 import { SONG_ABC } from "./song-scores";
 
 const HASH = "a".repeat(64);
+const UNITY_MIX = { volumeDb: 0, pan: 0, mute: false, solo: false };
 
 /** Two audio tracks: one with a candidate of each stem and one of a take with no stems, and a binding between them. */
 const AUDIO_TRACKS: Song["audioTracks"] = [
@@ -57,6 +66,25 @@ const AUDIO_TRACKS: Song["audioTracks"] = [
   },
 ];
 
+/** A version 1 draft as this package wrote it before the multitrack part existed, written out by hand. */
+const VERSION_1_DRAFT = {
+  version: 1,
+  sourceKey: "song-1",
+  sourceHash: HASH,
+  handoffHash: null,
+  updatedAt: 1690000000000,
+  project: {
+    style: "folk",
+    lyrics: "oh",
+    lyricLines: [{ text: "oh", phrase: null }],
+    score: SONG_ABC,
+    scoreMode: "full",
+    seed: null,
+    ending: "back-to-start",
+    stoppedBatches: ["batch-1"],
+  },
+};
+
 /** A version 2 draft as the previous format stored it: the score as text, the multitrack part, and fields v3 drops. */
 const VERSION_2_DRAFT = {
   version: 2,
@@ -96,10 +124,13 @@ const VERSION_2_DRAFT = {
           notes: [{ start: 0, duration: 128, midi: 36 }],
         },
       ],
-      audioTracks: [],
-      bindings: [],
-      baseTake: null,
-      timeMap: null,
+      audioTracks: AUDIO_TRACKS,
+      bindings: [["audio-1", "audio-2"]],
+      baseTake: "take-1",
+      timeMap: [
+        { score: 0, timeline: 0 },
+        { score: 4, timeline: 2.5 },
+      ],
     },
     mood: "calm",
     ending: "end-here",
@@ -109,8 +140,101 @@ const VERSION_2_DRAFT = {
   },
 };
 
-/** The song the version 2 draft reads as, counted by hand: the score's notes as in the import test, then the score tracks. */
-const EXPECTED: SongDraft = {
+/** The score's time grid of SONG_ABC, counted by hand. */
+const SCORE_TIME: TimeGrid = {
+  tempo: { unit: "1/4", bpm: 120 },
+  tempoChanges: [],
+  meter: { numerator: 4, denominator: 4 },
+  meterChanges: [{ bar: 2, meter: { numerator: 3, denominator: 4 } }],
+  keys: [
+    { at: 0, key: "G" },
+    { at: 30720, key: "C" },
+  ],
+  barCount: 4,
+  sections: [
+    { name: "intro", firstBar: 0, barCount: 2 },
+    { name: "verse", firstBar: 2, barCount: 2 },
+  ],
+};
+
+/** The Vocal notes of SONG_ABC, counted by hand: ids n1 to n8. */
+const VOCAL_NOTES: ReadonlyArray<SongNote> = [
+  { id: "n1", pitch: 67, start: 0, duration: 7680, velocity: 100 },
+  { id: "n2", pitch: 69, start: 11520, duration: 7680, velocity: 100 },
+  { id: "n3", pitch: 71, start: 19200, duration: 3840, velocity: 100 },
+  { id: "n4", pitch: 72, start: 23040, duration: 7680, velocity: 100 },
+  { id: "n5", pitch: 72, start: 30720, duration: 3840, velocity: 100 },
+  { id: "n6", pitch: 76, start: 34560, duration: 3840, velocity: 100 },
+  { id: "n7", pitch: 79, start: 38400, duration: 3840, velocity: 100 },
+  { id: "n8", pitch: 81, start: 42240, duration: 11520, velocity: 100 },
+];
+
+/** The Ins notes of SONG_ABC, counted by hand: ids n9 to n11. */
+const INS_NOTES: ReadonlyArray<SongNote> = [
+  { id: "n9", pitch: 62, start: 7680, duration: 7680, velocity: 100 },
+  { id: "n10", pitch: 62, start: 15360, duration: 7680, velocity: 100 },
+  { id: "n11", pitch: 52, start: 42240, duration: 11520, velocity: 100 },
+];
+
+/** The chord symbols of SONG_ABC, counted by hand: ids c12 to c14. */
+const SCORE_CHORDS: ReadonlyArray<SongChord> = [
+  { id: "c12", start: 0, name: "G" },
+  { id: "c13", start: 19200, name: "Em" },
+  { id: "c14", start: 30720, name: "C" },
+];
+
+/** The song the version 1 draft reads as: SONG_ABC with the default timbres and mixes, and no added tracks. */
+const EXPECTED_FROM_V1: SongDraft = {
+  version: 3,
+  sourceKey: "song-1",
+  sourceHash: HASH,
+  updatedAt: 1690000000000,
+  song: {
+    style: "folk",
+    lyricLines: [{ text: "oh", phrase: null }],
+    scoreMode: "full",
+    seed: null,
+    time: SCORE_TIME,
+    notationUnit: 1920,
+    tracks: [
+      {
+        id: "vocal",
+        name: "Vocal",
+        role: "vocal",
+        program: 52,
+        timbre: "lead",
+        mix: UNITY_MIX,
+        notes: VOCAL_NOTES,
+        placements: [],
+        pitchBend: [],
+        controls: [],
+      },
+      {
+        id: "ins",
+        name: "Ins",
+        role: "instrument",
+        program: 80,
+        timbre: "square-lead",
+        mix: UNITY_MIX,
+        notes: INS_NOTES,
+        placements: [],
+        pitchBend: [],
+        controls: [],
+      },
+    ],
+    chords: { program: 88, timbre: "pad", mix: UNITY_MIX, chords: SCORE_CHORDS },
+    clips: [],
+    guideTrack: "ins",
+    audioTracks: [],
+    bindings: [],
+    ending: "back-to-start",
+    stoppedBatches: ["batch-1"],
+    nextId: 15,
+  },
+};
+
+/** The song the version 2 draft reads as, counted by hand: the score's notes as in the import test, then its score tracks and audio tracks. */
+const EXPECTED_FROM_V2: SongDraft = {
   version: 3,
   sourceKey: "song-2",
   sourceHash: HASH,
@@ -120,21 +244,7 @@ const EXPECTED: SongDraft = {
     lyricLines: [{ text: "la la", phrase: null }],
     scoreMode: "full",
     seed: 7,
-    time: {
-      tempo: { unit: "1/4", bpm: 120 },
-      tempoChanges: [],
-      meter: { numerator: 4, denominator: 4 },
-      meterChanges: [{ bar: 2, meter: { numerator: 3, denominator: 4 } }],
-      keys: [
-        { at: 0, key: "G" },
-        { at: 30720, key: "C" },
-      ],
-      barCount: 4,
-      sections: [
-        { name: "intro", firstBar: 0, barCount: 2 },
-        { name: "verse", firstBar: 2, barCount: 2 },
-      ],
-    },
+    time: SCORE_TIME,
     notationUnit: 1920,
     tracks: [
       {
@@ -144,16 +254,7 @@ const EXPECTED: SongDraft = {
         program: 52,
         timbre: "warm-lead",
         mix: { volumeDb: -3, pan: -0.25, mute: false, solo: false },
-        notes: [
-          { id: "n1", pitch: 67, start: 0, duration: 7680, velocity: 100 },
-          { id: "n2", pitch: 69, start: 11520, duration: 7680, velocity: 100 },
-          { id: "n3", pitch: 71, start: 19200, duration: 3840, velocity: 100 },
-          { id: "n4", pitch: 72, start: 23040, duration: 7680, velocity: 100 },
-          { id: "n5", pitch: 72, start: 30720, duration: 3840, velocity: 100 },
-          { id: "n6", pitch: 76, start: 34560, duration: 3840, velocity: 100 },
-          { id: "n7", pitch: 79, start: 38400, duration: 3840, velocity: 100 },
-          { id: "n8", pitch: 81, start: 42240, duration: 11520, velocity: 100 },
-        ],
+        notes: VOCAL_NOTES,
         placements: [],
         pitchBend: [],
         controls: [],
@@ -165,11 +266,7 @@ const EXPECTED: SongDraft = {
         program: 80,
         timbre: "soft-pad",
         mix: { volumeDb: -6, pan: 0.5, mute: false, solo: true },
-        notes: [
-          { id: "n9", pitch: 62, start: 7680, duration: 7680, velocity: 100 },
-          { id: "n10", pitch: 62, start: 15360, duration: 7680, velocity: 100 },
-          { id: "n11", pitch: 52, start: 42240, duration: 11520, velocity: 100 },
-        ],
+        notes: INS_NOTES,
         placements: [],
         pitchBend: [],
         controls: [],
@@ -207,16 +304,12 @@ const EXPECTED: SongDraft = {
       program: 88,
       timbre: "organ",
       mix: { volumeDb: -9, pan: 0, mute: true, solo: false },
-      chords: [
-        { id: "c12", start: 0, name: "G" },
-        { id: "c13", start: 19200, name: "Em" },
-        { id: "c14", start: 30720, name: "C" },
-      ],
+      chords: SCORE_CHORDS,
     },
     clips: [],
     guideTrack: "ins",
-    audioTracks: [],
-    bindings: [],
+    audioTracks: AUDIO_TRACKS,
+    bindings: [["audio-1", "audio-2"]],
     mood: "calm",
     ending: "end-here",
     stoppedBatches: ["batch-1"],
@@ -355,6 +448,12 @@ const RICH_DRAFT: SongDraft = {
   },
 };
 
+/** The song without its mood, ending and stopped batches, and with no seed and no guide track. */
+function bareSong(song: Song): Song {
+  const { mood: _mood, ending: _ending, stoppedBatches: _stoppedBatches, ...rest } = song;
+  return { ...rest, seed: null, guideTrack: null };
+}
+
 /** The path to every object of a parsed JSON value, the value itself included, as the keys and indexes that reach it. */
 function objectPaths(
   value: unknown,
@@ -375,12 +474,33 @@ function withExtraFieldAt(text: string, path: ReadonlyArray<string | number>): s
 }
 
 describe("readSongDraft", () => {
-  it("reads a version 2 draft as its notes, with its timbres, mixes and score tracks", () => {
-    expect(readSongDraft(JSON.stringify(VERSION_2_DRAFT), yue2Dialect)).toEqual(EXPECTED);
+  it("reads a version 1 draft as the default multitrack part, with the notes of its score", () => {
+    const draft = readSongDraft(JSON.stringify(VERSION_1_DRAFT), yue2Dialect);
+    expect(draft).toStrictEqual(EXPECTED_FROM_V1);
+    expect(readSongDraft(songDraftText(EXPECTED_FROM_V1), yue2Dialect)).toStrictEqual(draft);
+  });
+
+  it("reads a version 2 draft as its notes, with its timbres, mixes, score tracks and audio tracks", () => {
+    const draft = readSongDraft(JSON.stringify(VERSION_2_DRAFT), yue2Dialect);
+    expect(draft).toStrictEqual(EXPECTED_FROM_V2);
+    expect(readSongDraft(songDraftText(EXPECTED_FROM_V2), yue2Dialect)).toStrictEqual(draft);
   });
 
   it("reads a version 3 draft back as it was written, with every optional branch filled", () => {
     expect(readSongDraft(songDraftText(RICH_DRAFT), yue2Dialect)).toStrictEqual(RICH_DRAFT);
+  });
+
+  it("reads a version 3 draft whose optional fields are absent as it was written", () => {
+    const bare: SongDraft = { ...RICH_DRAFT, song: bareSong(RICH_DRAFT.song) };
+    expect(readSongDraft(songDraftText(bare), yue2Dialect)).toStrictEqual(bare);
+  });
+
+  it("is no draft when a version 3 draft has a field the song model does not list, at any object", () => {
+    const text = songDraftText(RICH_DRAFT);
+    const accepted = objectPaths(JSON.parse(text)).filter(
+      (path) => readSongDraft(withExtraFieldAt(text, path), yue2Dialect) !== null,
+    );
+    expect(accepted).toEqual([]);
   });
 
   it("is no draft when a version 3 draft has a shape the song model does not have", () => {
@@ -394,14 +514,6 @@ describe("readSongDraft", () => {
     expect(readSongDraft(JSON.stringify(withBadRole), yue2Dialect)).toBeNull();
     expect(readSongDraft(JSON.stringify(withBadBend), yue2Dialect)).toBeNull();
     expect(readSongDraft(JSON.stringify(withoutSong), yue2Dialect)).toBeNull();
-  });
-
-  it("is no draft when a version 3 draft has a field the song model does not list, at any object", () => {
-    const text = songDraftText(RICH_DRAFT);
-    const accepted = objectPaths(JSON.parse(text)).filter(
-      (path) => readSongDraft(withExtraFieldAt(text, path), yue2Dialect) !== null,
-    );
-    expect(accepted).toEqual([]);
   });
 
   it("is no draft when a version 2 draft's score does not read", () => {
