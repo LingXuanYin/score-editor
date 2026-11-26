@@ -266,3 +266,5 @@ export {
   VOCAL_TRACK_ID,
 } from "./song";
 export { songFromScore } from "./song-import";
+export type { SongDraft } from "./song-drafts";
+export { readSongDraft, SONG_DRAFT_VERSION, songDraftText } from "./song-drafts";
