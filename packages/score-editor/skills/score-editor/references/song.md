@@ -39,6 +39,6 @@ A `Song` holds `style`, `lyricLines`, `scoreMode`, `seed`, the `time` grid (a `T
 
 `SONG_DRAFT_VERSION` is 3. `songDraftText(draft)` writes a `SongDraft`: the version, the source key, the source hash, the update time and the `song` itself. `readSongDraft(text, dialect)`:
 
-- returns the `SongDraft` for a version 3 text whose shape the song model has, and `null` when the shape is wrong;
+- returns the `SongDraft` for a version 3 text whose shape the song model has, and `null` when the shape is wrong, including a field at any level that the model does not list (it is never dropped silently);
 - reads a version 1 or 2 draft by parsing its score with the `dialect` the host passes, and importing that score. The model ID an old draft carries is not read. Its timbres and mixes go to the voice tracks and the chord track; its score tracks become tracks (role `drums` for a drum track, otherwise `instrument`, program 0, notes in song ticks at the default velocity); its audio tracks, bindings, lyric lines, mood, ending and stopped batches are kept. Its handoff hash, change records, base take and time map are not carried over. An old draft's instrumental timbre and mix apply only when its score has an `Ins` voice;
 - returns `null` for any other text, and for an old draft whose score does not read.

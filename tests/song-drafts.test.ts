@@ -355,6 +355,25 @@ const RICH_DRAFT: SongDraft = {
   },
 };
 
+/** The path to every object of a parsed JSON value, the value itself included, as the keys and indexes that reach it. */
+function objectPaths(
+  value: unknown,
+  path: ReadonlyArray<string | number> = [],
+): ReadonlyArray<ReadonlyArray<string | number>> {
+  if (Array.isArray(value)) return value.flatMap((item, index) => objectPaths(item, [...path, index]));
+  if (typeof value !== "object" || value === null) return [];
+  return [path, ...Object.entries(value).flatMap(([key, child]) => objectPaths(child, [...path, key]))];
+}
+
+/** The text of a draft with one more field, `extra`, on the object that `path` reaches. */
+function withExtraFieldAt(text: string, path: ReadonlyArray<string | number>): string {
+  const draft = JSON.parse(text);
+  let object = draft;
+  for (const key of path) object = object[key];
+  object.extra = true;
+  return JSON.stringify(draft);
+}
+
 describe("readSongDraft", () => {
   it("reads a version 2 draft as its notes, with its timbres, mixes and score tracks", () => {
     expect(readSongDraft(JSON.stringify(VERSION_2_DRAFT), yue2Dialect)).toEqual(EXPECTED);
@@ -375,6 +394,14 @@ describe("readSongDraft", () => {
     expect(readSongDraft(JSON.stringify(withBadRole), yue2Dialect)).toBeNull();
     expect(readSongDraft(JSON.stringify(withBadBend), yue2Dialect)).toBeNull();
     expect(readSongDraft(JSON.stringify(withoutSong), yue2Dialect)).toBeNull();
+  });
+
+  it("is no draft when a version 3 draft has a field the song model does not list, at any object", () => {
+    const text = songDraftText(RICH_DRAFT);
+    const accepted = objectPaths(JSON.parse(text)).filter(
+      (path) => readSongDraft(withExtraFieldAt(text, path), yue2Dialect) !== null,
+    );
+    expect(accepted).toEqual([]);
   });
 
   it("is no draft when a version 2 draft's score does not read", () => {

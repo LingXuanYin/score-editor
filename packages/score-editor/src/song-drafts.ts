@@ -24,12 +24,12 @@ export interface SongDraft {
 const str = v.string();
 const flag = v.boolean();
 const int = v.pipe(v.number(), v.integer());
-const mix = v.object({ volumeDb: v.number(), pan: v.number(), mute: flag, solo: flag });
-const meter = v.object({ numerator: int, denominator: int });
-const tempo = v.object({ unit: str, bpm: v.number() });
+const mix = v.strictObject({ volumeDb: v.number(), pan: v.number(), mute: flag, solo: flag });
+const meter = v.strictObject({ numerator: int, denominator: int });
+const tempo = v.strictObject({ unit: str, bpm: v.number() });
 const role = v.picklist(["vocal", "instrument", "drums"]);
-const curvePoint = v.object({ at: int, value: v.number() });
-const songNote = v.object({
+const curvePoint = v.strictObject({ at: int, value: v.number() });
+const songNote = v.strictObject({
   id: str,
   pitch: int,
   start: int,
@@ -38,7 +38,7 @@ const songNote = v.object({
   probability: v.exactOptional(v.number()),
   muted: v.exactOptional(flag),
 });
-const clipPlacement = v.object({
+const clipPlacement = v.strictObject({
   id: str,
   clip: str,
   start: int,
@@ -46,7 +46,7 @@ const clipPlacement = v.object({
   trimStart: int,
   trimEnd: int,
 });
-const songTrack = v.object({
+const songTrack = v.strictObject({
   id: str,
   name: str,
   role,
@@ -57,38 +57,40 @@ const songTrack = v.object({
   placements: v.array(clipPlacement),
   pitchBend: v.array(curvePoint),
   bendRange: v.exactOptional(v.number()),
-  controls: v.array(v.object({ controller: int, points: v.array(curvePoint) })),
+  controls: v.array(v.strictObject({ controller: int, points: v.array(curvePoint) })),
 });
-const clip = v.object({ id: str, name: str, role, program: int, length: int, notes: v.array(songNote) });
-const chordTrack = v.object({
+const clip = v.strictObject({ id: str, name: str, role, program: int, length: int, notes: v.array(songNote) });
+const chordTrack = v.strictObject({
   program: int,
   timbre: str,
   mix,
-  chords: v.array(v.object({ id: str, start: int, name: str })),
+  chords: v.array(v.strictObject({ id: str, start: int, name: str })),
 });
-const span = v.object({ start: v.number(), end: v.number() });
-const placement = v.object({
+const span = v.strictObject({ start: v.number(), end: v.number() });
+const placement = v.strictObject({
   id: str,
   take: str,
   stem: v.nullable(v.picklist(["vocals", "drums", "bass", "other"])),
-  anchors: v.array(v.object({ recording: v.number(), timeline: v.number() })),
+  anchors: v.array(v.strictObject({ recording: v.number(), timeline: v.number() })),
   removed: v.array(span),
   uncertain: flag,
   suspect: v.array(span),
 });
-const audioTrack = v.object({ ...placement.entries, mix, candidates: v.array(placement) });
-const timeGrid = v.object({
+const audioTrack = v.strictObject({ ...placement.entries, mix, candidates: v.array(placement) });
+const timeGrid = v.strictObject({
   tempo,
-  tempoChanges: v.array(v.object({ at: int, tempo })),
+  tempoChanges: v.array(v.strictObject({ at: int, tempo })),
   meter,
-  meterChanges: v.array(v.object({ bar: int, meter })),
-  keys: v.array(v.object({ at: int, key: str })),
+  meterChanges: v.array(v.strictObject({ bar: int, meter })),
+  keys: v.array(v.strictObject({ at: int, key: str })),
   barCount: int,
-  sections: v.array(v.object({ name: v.nullable(str), firstBar: int, barCount: int })),
+  sections: v.array(v.strictObject({ name: v.nullable(str), firstBar: int, barCount: int })),
 });
-const songSchema = v.object({
+const songSchema = v.strictObject({
   style: str,
-  lyricLines: v.array(v.object({ text: str, phrase: v.nullable(v.object({ firstBar: int, barCount: int })) })),
+  lyricLines: v.array(
+    v.strictObject({ text: str, phrase: v.nullable(v.strictObject({ firstBar: int, barCount: int })) }),
+  ),
   scoreMode: v.picklist(["full", "melody"]),
   seed: v.nullable(int),
   time: timeGrid,
@@ -104,7 +106,7 @@ const songSchema = v.object({
   stoppedBatches: v.exactOptional(v.array(str)),
   nextId: int,
 });
-const songDraftSchema = v.object({
+const songDraftSchema = v.strictObject({
   version: v.literal(SONG_DRAFT_VERSION),
   sourceKey: str,
   sourceHash: v.pipe(str, v.regex(/^[0-9a-f]{64}$/)),
