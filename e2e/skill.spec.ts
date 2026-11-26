@@ -15,7 +15,7 @@ const editOneBarScore = fileURLToPath(
 );
 const coreSpecifier = `https://esm.sh/@anti_entropy/score-editor@${version}?bundle&target=es2022`;
 const dialectSpecifier = `https://esm.sh/@anti_entropy/score-dialect-yue2@${version}?bundle&target=es2022`;
-const coreLocal = "/packages/score-editor/dist/index.js";
+const coreLocal = "/e2e/page/vendor/score-editor.js";
 const dialectLocal = "/packages/score-dialect-yue2/dist/index.js";
 const bundleRequest = "/packages/score-editor/skills/score-editor/assets/pnpm-bundler/dist/main.js";
 const bundleFile = fileURLToPath(new URL("./page/skill/pnpm-bundler.js", import.meta.url));
